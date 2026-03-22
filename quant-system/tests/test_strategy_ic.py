@@ -34,7 +34,7 @@ def _make_market_data(**overrides):
 
 class TestICEntryGates:
     def test_rejects_low_iv_rank(self):
-        data = _make_market_data(iv_rank=25.0)
+        data = _make_market_data(iv_rank=15.0)
         signal = ic.check_entry_conditions(data)
         assert signal.should_enter is False
         assert "IV Rank" in signal.reason

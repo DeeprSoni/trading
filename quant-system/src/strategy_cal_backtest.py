@@ -14,6 +14,9 @@ from src.iv_calculator import IVCalculator
 from src.models import (
     AdjustmentDecision, EntryDecision, ExitDecision, Leg, MarketState, Position,
 )
+from src.adjustments_cal import (
+    evaluate_cal_adjustment, CALPosition, CALAdjustmentConfig, CALAdjustment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +246,142 @@ class CalBacktestAdapter:
         if move_pct >= p["move_pct_to_adjust"] and move_pct < p["move_pct_to_close"]:
             return self._recentre(position, state, front_leg, back_leg, move_pct)
 
+        # 5-8. V2 adjustment checks: diagonal, early profit, add second calendar
+        v2_result = self._check_v2_adjustments(
+            position, state, front_leg, back_leg, strike,
+        )
+        if v2_result.should_adjust:
+            return v2_result
+
         return AdjustmentDecision(False, "NONE", reason="Calendar: within range")
+
+    def _build_cal_position(
+        self, position: Position, state: MarketState,
+        front_leg, back_leg, strike,
+    ) -> CALPosition:
+        """Construct CALPosition from Position legs + metadata."""
+        chain = state.option_chain
+        entry_spot = position.metadata.get("entry_spot", state.underlying_price)
+
+        front_curr = self._get_mid_by_expiry(
+            chain, front_leg.strike, front_leg.option_type, front_leg.expiry_date,
+        )
+
+        return CALPosition(
+            symbol="NIFTY",
+            entry_date=position.entry_date,
+            entry_spot=entry_spot,
+            front_expiry=front_leg.expiry_date,
+            back_expiry=back_leg.expiry_date,
+            front_month_entry_value=front_leg.premium,
+            front_month_current_value=front_curr,
+            back_month_iv_at_entry=position.metadata.get("back_iv_at_entry", 0),
+            back_month_iv_current=self._get_iv_by_expiry(
+                chain, back_leg.strike, back_leg.option_type, back_leg.expiry_date,
+            ),
+            calendar_entry_credit=abs(position.net_premium_per_unit),
+            calendar_current_value=self._position_value(position, state),
+            secondary_calendars_added=position.metadata.get("secondary_calendars_added", 0),
+            is_diagonal=position.metadata.get("is_diagonal", False),
+        )
+
+    def _check_v2_adjustments(
+        self, position, state, front_leg, back_leg, strike,
+    ) -> AdjustmentDecision:
+        """Check v2 CAL adjustments: early profit, diagonal, add second cal."""
+        cal_pos = self._build_cal_position(position, state, front_leg, back_leg, strike)
+
+        front_dte = (front_leg.expiry_date - state.date).days
+        back_dte = (back_leg.expiry_date - state.date).days
+
+        # Skip checks already handled above (large move, back near, IV harvest,
+        # front roll, recentre)
+        cfg = CALAdjustmentConfig(
+            large_move_pct=999.0,
+            back_close_dte=0,
+            iv_harvest_trigger=999.0,
+            front_roll_dte=0,
+            full_recentre_pct=999.0,
+        )
+
+        action = evaluate_cal_adjustment(cal_pos, state.underlying_price, front_dte, back_dte, cfg)
+
+        if action == CALAdjustment.NONE:
+            return AdjustmentDecision(False, "NONE")
+
+        return self._map_v2_cal_adjustment(
+            action, position, state, cal_pos, front_leg, back_leg,
+        )
+
+    def _map_v2_cal_adjustment(
+        self, action, position, state, cal_pos, front_leg, back_leg,
+    ) -> AdjustmentDecision:
+        """Map CALAdjustment enum to AdjustmentDecision."""
+        chain = state.option_chain
+        expiry = front_leg.expiry_date
+
+        if action == CALAdjustment.EARLY_PROFIT_CLOSE:
+            close_legs = self._make_exit_legs(position, state)
+            close_cost = self.reprice_position(position, state)
+            return AdjustmentDecision(
+                should_adjust=True, action="EARLY_PROFIT_CLOSE",
+                close_legs=close_legs, new_legs=[],
+                reason=f"Early profit {cal_pos.unrealized_profit_pct:.0%} — closing",
+                close_cost=close_cost,
+            )
+
+        if action == CALAdjustment.DIAGONAL_CONVERT:
+            # Close current front, sell OTM front (diagonal)
+            front_close_mid = self._get_mid_by_expiry(
+                chain, front_leg.strike, front_leg.option_type, expiry,
+            )
+            close_legs = [
+                Leg(front_leg.strike, front_leg.option_type, "BUY", front_close_mid, expiry),
+            ]
+            # Sell front at new strike (OTM in direction of move)
+            direction = 1 if state.underlying_price > cal_pos.entry_spot else -1
+            new_strike = round((state.underlying_price + direction * 100) / 100) * 100
+            new_front_mid = self._get_mid_by_expiry(
+                chain, new_strike, front_leg.option_type, expiry,
+            )
+            new_legs = [
+                Leg(new_strike, front_leg.option_type, "SELL", new_front_mid, expiry),
+            ]
+            position.metadata["is_diagonal"] = True
+            return AdjustmentDecision(
+                should_adjust=True, action="DIAGONAL_CONVERT",
+                close_legs=close_legs, new_legs=new_legs,
+                reason=f"1.5%+ move — converting to diagonal at {new_strike}",
+                close_cost=front_close_mid,
+            )
+
+        if action == CALAdjustment.ADD_SECOND_CAL:
+            # Add second calendar 200 pts OTM
+            offset = 200
+            direction = 1 if state.underlying_price > cal_pos.entry_spot else -1
+            new_strike = round((state.underlying_price + direction * offset) / 100) * 100
+
+            new_front_mid = self._get_mid_by_expiry(
+                chain, new_strike, front_leg.option_type, front_leg.expiry_date,
+            )
+            new_back_mid = self._get_mid_by_expiry(
+                chain, new_strike, back_leg.option_type, back_leg.expiry_date,
+            )
+            new_legs = [
+                Leg(new_strike, front_leg.option_type, "SELL", new_front_mid, front_leg.expiry_date),
+                Leg(new_strike, back_leg.option_type, "BUY", new_back_mid, back_leg.expiry_date),
+            ]
+            position.metadata["secondary_calendars_added"] = (
+                position.metadata.get("secondary_calendars_added", 0) + 1
+            )
+            return AdjustmentDecision(
+                should_adjust=True, action="ADD_SECOND_CAL",
+                close_legs=[], new_legs=new_legs,
+                reason=f"Adding second calendar at {new_strike} (25%+ profit, market stable)",
+                new_premium_per_unit=-(new_back_mid - new_front_mid),
+            )
+
+        return AdjustmentDecision(False, "NONE")
 
     def _roll_front_month(self, position, state, front_leg, back_leg, reason):
         """Close current front month, sell new front month at same strike with next expiry."""

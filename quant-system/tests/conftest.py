@@ -1,11 +1,15 @@
 import json
 import os
 import sys
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+
+# Suppress deprecation warning from synthetic_data_generator in test collection
+warnings.filterwarnings("ignore", message="synthetic_data_generator is DEPRECATED", category=DeprecationWarning)
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 

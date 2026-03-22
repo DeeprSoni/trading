@@ -15,6 +15,9 @@ from src.iv_calculator import IVCalculator
 from src.models import (
     AdjustmentDecision, EntryDecision, ExitDecision, Leg, MarketState, Position,
 )
+from src.adjustments_ic import (
+    evaluate_ic_adjustment, ICPosition, ICAdjustmentConfig, ICAdjustment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,11 +210,12 @@ class ICBacktestAdapter:
         return ExitDecision(False, "NONE", "MONITOR", "Within parameters", close_cost)
 
     def should_adjust(self, position: Position, state: MarketState) -> AdjustmentDecision:
-        """IC adjustment logic per PRD:
+        """IC adjustment logic v2 — priority-ordered checks:
 
         1. DTE < 10 → hard close (gamma risk too high to adjust)
-        2. Short strike within 300 pts of underlying → roll tested side 500 pts further OTM
+        2. Short strike within 300 pts of underlying → roll tested side further OTM
         3. While rolling, if opposite side at 85%+ profit → harvest it
+        4-8. V2 adjustments: wing removal, partial close, roll untested, defensive roll, iron fly
         """
         chain = state.option_chain
         expiry = position.legs[0].expiry_date
@@ -251,19 +255,207 @@ class ICBacktestAdapter:
         underlying = state.underlying_price
         breach_dist = 300
 
-        # 2. Call side tested
+        # 2. Call side tested (distance-based roll)
         if (short_call.strike - underlying) <= breach_dist:
             return self._roll_call_side(
                 position, state, short_call, long_call, short_put, long_put,
             )
 
-        # 3. Put side tested
+        # 3. Put side tested (distance-based roll)
         if (underlying - short_put.strike) <= breach_dist:
             return self._roll_put_side(
                 position, state, short_call, long_call, short_put, long_put,
             )
 
+        # 4-8. V2 adjustment engine — additional checks
+        v2_result = self._check_v2_adjustments(
+            position, state, short_call, short_put, long_call, long_put, dte,
+        )
+        if v2_result.should_adjust:
+            return v2_result
+
         return AdjustmentDecision(False, "NONE", reason="IC: within parameters")
+
+    def _build_ic_position(
+        self, position: Position, state: MarketState,
+        short_call, short_put, long_call, long_put,
+    ) -> ICPosition:
+        """Construct ICPosition from Position legs + current chain prices."""
+        chain = state.option_chain
+
+        sc_curr = self._get_mid(chain, short_call.strike, "CE")
+        sp_curr = self._get_mid(chain, short_put.strike, "PE")
+        lc_curr = self._get_mid(chain, long_call.strike, "CE")
+        lp_curr = self._get_mid(chain, long_put.strike, "PE")
+
+        call_spread_orig = short_call.premium - long_call.premium
+        put_spread_orig = short_put.premium - long_put.premium
+        call_spread_curr = sc_curr - lc_curr
+        put_spread_curr = sp_curr - lp_curr
+
+        return ICPosition(
+            symbol="NIFTY",
+            entry_date=position.entry_date,
+            expiry_date=position.legs[0].expiry_date,
+            original_credit=position.net_premium_per_unit,
+            call_spread_original_credit=max(call_spread_orig, 0),
+            put_spread_original_credit=max(put_spread_orig, 0),
+            call_spread_current_value=max(call_spread_curr, 0),
+            put_spread_current_value=max(put_spread_curr, 0),
+            long_call_value=lc_curr,
+            long_put_value=lp_curr,
+            short_call_strike=short_call.strike,
+            short_put_strike=short_put.strike,
+            untested_rolls_done=position.metadata.get("untested_rolls_done", 0),
+            tested_rolls_done=position.metadata.get("tested_rolls_done", 0),
+            call_side_closed=position.metadata.get("call_side_closed", False),
+            put_side_closed=position.metadata.get("put_side_closed", False),
+            wings_removed=position.metadata.get("wings_removed", False),
+        )
+
+    def _check_v2_adjustments(
+        self, position, state, short_call, short_put, long_call, long_put, dte,
+    ) -> AdjustmentDecision:
+        """Check v2 adjustment types: wing removal, partial close, defensive roll, iron fly."""
+        ic_pos = self._build_ic_position(
+            position, state, short_call, short_put, long_call, long_put,
+        )
+
+        chain = state.option_chain
+        # Get deltas for short strikes
+        sc_delta = self._get_leg_delta(chain, short_call, state, dte)
+        sp_delta = self._get_leg_delta(chain, short_put, state, dte)
+
+        # Configure: skip stop/profit/time checks (handled by should_exit + DTE<10 above)
+        cfg = ICAdjustmentConfig(
+            stop_loss_multiplier=999.0,
+            profit_target_pct=999.0,
+            time_stop_dte=0,
+        )
+
+        action = evaluate_ic_adjustment(
+            ic_pos, state.underlying_price, sc_delta, sp_delta, dte, cfg,
+        )
+
+        if action == ICAdjustment.NONE:
+            return AdjustmentDecision(False, "NONE")
+
+        return self._map_v2_adjustment(
+            action, position, state, ic_pos,
+            short_call, short_put, long_call, long_put, dte,
+        )
+
+    def _get_leg_delta(self, chain, leg, state, dte) -> float:
+        """Get absolute delta for a leg from chain or via BS calculation."""
+        for rec in chain.get("records", []):
+            if rec["strike"] == leg.strike and rec["option_type"] == leg.option_type:
+                if "delta" in rec and rec["delta"] != 0:
+                    return abs(rec["delta"])
+        # Fallback: compute via BS
+        iv = 0.20
+        for rec in chain.get("records", []):
+            if rec["strike"] == leg.strike and rec["option_type"] == leg.option_type:
+                iv = rec.get("iv", 0.20)
+                if isinstance(iv, str) or iv <= 0:
+                    iv = 0.20
+                if iv > 1.0:
+                    iv = iv / 100
+                break
+        T = max(dte / 365.0, 0.001)
+        delta = self.iv_calc._bs_delta(state.underlying_price, leg.strike, T, 0.065, iv, leg.option_type)
+        return abs(delta)
+
+    def _map_v2_adjustment(
+        self, action, position, state, ic_pos,
+        short_call, short_put, long_call, long_put, dte,
+    ) -> AdjustmentDecision:
+        """Map ICAdjustment enum to AdjustmentDecision with close_legs/new_legs."""
+        chain = state.option_chain
+        expiry = position.legs[0].expiry_date
+
+        if action == ICAdjustment.WING_REMOVAL:
+            # Close both long wings, keep short legs
+            lc_mid = self._get_mid(chain, long_call.strike, "CE")
+            lp_mid = self._get_mid(chain, long_put.strike, "PE")
+            close_legs = [
+                Leg(long_call.strike, "CE", "SELL", lc_mid, expiry),
+                Leg(long_put.strike, "PE", "SELL", lp_mid, expiry),
+            ]
+            return AdjustmentDecision(
+                should_adjust=True, action="WING_REMOVAL",
+                close_legs=close_legs, new_legs=[],
+                reason=f"DTE {dte} — wings nearly dead, removing to free margin",
+                close_cost=0.0,
+            )
+
+        if action == ICAdjustment.PARTIAL_CLOSE_WINNER:
+            # Close whichever side is at 80%+ profit
+            if ic_pos.call_spread_profit_pct >= 0.80:
+                sc_mid = self._get_mid(chain, short_call.strike, "CE")
+                lc_mid = self._get_mid(chain, long_call.strike, "CE")
+                close_legs = [
+                    Leg(short_call.strike, "CE", "BUY", sc_mid, expiry),
+                    Leg(long_call.strike, "CE", "SELL", lc_mid, expiry),
+                ]
+                return AdjustmentDecision(
+                    should_adjust=True, action="PARTIAL_CLOSE_WINNER",
+                    close_legs=close_legs, new_legs=[],
+                    reason=f"Call side at {ic_pos.call_spread_profit_pct:.0%} profit — closing winner",
+                    close_cost=sc_mid - lc_mid,
+                )
+            else:
+                sp_mid = self._get_mid(chain, short_put.strike, "PE")
+                lp_mid = self._get_mid(chain, long_put.strike, "PE")
+                close_legs = [
+                    Leg(short_put.strike, "PE", "BUY", sp_mid, expiry),
+                    Leg(long_put.strike, "PE", "SELL", lp_mid, expiry),
+                ]
+                return AdjustmentDecision(
+                    should_adjust=True, action="PARTIAL_CLOSE_WINNER",
+                    close_legs=close_legs, new_legs=[],
+                    reason=f"Put side at {ic_pos.put_spread_profit_pct:.0%} profit — closing winner",
+                    close_cost=sp_mid - lp_mid,
+                )
+
+        if action == ICAdjustment.ROLL_UNTESTED_INWARD:
+            # Roll the untested side inward for fresh credit
+            call_distance = short_call.strike - state.underlying_price
+            put_distance = state.underlying_price - short_put.strike
+            if call_distance > put_distance:
+                # Call side is untested — roll it inward
+                return self._roll_call_side(
+                    position, state, short_call, long_call, short_put, long_put,
+                )
+            else:
+                return self._roll_put_side(
+                    position, state, short_call, long_call, short_put, long_put,
+                )
+
+        if action == ICAdjustment.DEFENSIVE_ROLL:
+            # Roll the tested side further out
+            sc_delta = self._get_leg_delta(chain, short_call, state, dte)
+            sp_delta = self._get_leg_delta(chain, short_put, state, dte)
+            if sc_delta > sp_delta:
+                return self._roll_call_side(
+                    position, state, short_call, long_call, short_put, long_put,
+                )
+            else:
+                return self._roll_put_side(
+                    position, state, short_call, long_call, short_put, long_put,
+                )
+
+        if action == ICAdjustment.IRON_FLY_CONVERSION:
+            # Close current IC, open iron fly at ATM
+            close_legs = self._make_exit_legs(position, state)
+            close_cost = self.reprice_position(position, state)
+            return AdjustmentDecision(
+                should_adjust=True, action="IRON_FLY_CONVERSION",
+                close_legs=close_legs, new_legs=[],
+                reason="Spot at short strike — converting to iron fly (closing IC)",
+                close_cost=close_cost,
+            )
+
+        return AdjustmentDecision(False, "NONE")
 
     def _roll_call_side(self, position, state, short_call, long_call, short_put, long_put):
         """Roll call spread 500 pts higher. Optionally harvest put side."""

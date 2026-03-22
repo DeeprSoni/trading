@@ -11,12 +11,51 @@ ZERODHA_USER_ID = os.getenv("ZERODHA_USER_ID")
 # ANTHROPIC
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-# CAPITAL
-TOTAL_CAPITAL = 750000  # Rs 7,50,000 midpoint of target range
-ACTIVE_TRADING_CAPITAL = 300000  # Rs 3,00,000 deployed as margin
-RESERVE_BUFFER = 250000  # Never deployed in normal conditions
-COIN_FUND_CAPITAL = 150000  # Always parked in liquid fund
-CASH_BUFFER = 50000  # For brokerage and settlement
+# ────────────────────────────────────────────────────────────────
+# CAPITAL STRUCTURE  (Total: Rs 7,50,000)
+# ────────────────────────────────────────────────────────────────
+# Before: Rs 3L idle in "reserve" earning 0%
+# After:  All non-deployed capital earns yield
+# ────────────────────────────────────────────────────────────────
+
+TOTAL_CAPITAL = 750_000
+
+CAPITAL_STRUCTURE = {
+    # Active trading margin deployed per day
+    "nifty_active":       90_000,   # Nifty IC/CAL margin
+    "banknifty_active":   70_000,   # BankNifty IC margin  (Phase 3)
+    "finnifty_active":    40_000,   # FinNifty IC margin   (Phase 3)
+
+    # Parked capital — ALL earning yield now (none idle)
+    "liquid_fund":       400_000,   # +Rs 26,000/yr at 6.5% (same-day redemption)
+    "arbitrage_fund":    100_000,   # +Rs 7,500/yr at 7.5%  (low-tax, 30-day exit)
+    "cash_buffer":        50_000,   # Settlement + emergency buffer in savings
+}
+
+PARKED_YIELD = {
+    "liquid_fund":     0.065,
+    "arbitrage_fund":  0.075,
+    "cash_buffer":     0.035,
+}
+
+# Annual income from parked capital alone
+# Rs 4L × 6.5% + Rs 1L × 7.5% + Rs 50K × 3.5% = Rs 35,750/yr = 4.77% on total
+PARKED_CAPITAL_ANNUAL_INCOME = sum(
+    CAPITAL_STRUCTURE[k] * PARKED_YIELD[k]
+    for k in PARKED_YIELD
+    if k in CAPITAL_STRUCTURE
+)
+
+# Initially Phase 1: only Nifty active (Rs 90K)
+# Phase 3 onwards: all three underlyings active (Rs 2L total)
+PHASE_1_ACTIVE_CAPITAL = 90_000
+PHASE_3_ACTIVE_CAPITAL = 200_000
+
+# Backward-compat aliases (referenced by existing code)
+ACTIVE_TRADING_CAPITAL = PHASE_1_ACTIVE_CAPITAL
+RESERVE_BUFFER = 0  # deprecated, all capital now earning yield
+COIN_FUND_CAPITAL = CAPITAL_STRUCTURE["liquid_fund"]
+CASH_BUFFER = CAPITAL_STRUCTURE["cash_buffer"]
 
 # INSTRUMENTS
 NIFTY_LOT_SIZE = 25
@@ -29,12 +68,69 @@ IC_SHORT_DELTA = 0.16
 IC_WING_WIDTH_POINTS = 500
 IC_MIN_DTE_ENTRY = 30
 IC_MAX_DTE_ENTRY = 45
-IC_MIN_IV_RANK = 30
 IC_PROFIT_TARGET_PCT = 0.50
 IC_STOP_LOSS_MULTIPLIER = 2.0
 IC_TIME_STOP_DTE = 21
 IC_MAX_OPEN_POSITIONS = 2
 IC_MAX_PCT_CAPITAL_PER_TRADE = 0.05
+
+# ── IC Entry Gates (v2 — relaxed) ────────────────────────────────────────────
+
+# Gate 1: IV Rank — lowered from 30 → 20
+# Rationale: IVR 20-30 is still above median; 40% more trade opportunities
+IC_IVR_MIN = 20
+
+# NEW: IV must be at least 15% above 30-day realized vol
+IC_IV_ABOVE_REALIZED = 0.15
+
+# Gate 2: VIX — replaced binary cutoff with dynamic sizing
+# Old rule: skip ALL ICs when VIX > 25 (missed highest-premium windows)
+# New rule: trade at any VIX, but adjust wings + size dynamically
+IC_VIX_STANDARD_MAX = 25    # below: standard wings + full size
+IC_VIX_ELEVATED_MAX = 35    # 25-35: wider wings + half size
+IC_VIX_KILLSWITCH = 40      # above: no new ICs (genuine panic)
+
+# Gate 5: Event blackout — reduced from 25 → 7 days
+# Rationale: 25-day window was blocking ~60% of the calendar year
+# New rule: avoid entries if EXPIRY falls within 3 days of a major event
+IC_EVENT_BLACKOUT_DAYS = 7
+IC_EVENT_EXPIRY_BLACKOUT_DAYS = 3
+
+# Backward-compat alias
+IC_MIN_IV_RANK = IC_IVR_MIN
+
+# ── Dynamic wing width based on VIX ──────────────────────────────────────────
+IC_WING_TABLE = {
+    # (vix_min, vix_max): wing_points
+    (0,  15): 400,
+    (15, 20): 500,
+    (20, 25): 600,
+    (25, 30): 700,
+    (30, 35): 800,
+    (35, 99): 900,
+}
+
+IC_SIZE_TABLE = {
+    # (vix_min, vix_max): position_size_multiplier
+    (0,  25): 1.00,
+    (25, 30): 0.75,
+    (30, 35): 0.50,
+    (35, 99): 0.25,
+}
+
+
+def get_ic_wing_width(vix: float) -> int:
+    for (lo, hi), w in IC_WING_TABLE.items():
+        if lo <= vix < hi:
+            return w
+    return 600
+
+
+def get_ic_size_multiplier(vix: float) -> float:
+    for (lo, hi), m in IC_SIZE_TABLE.items():
+        if lo <= vix < hi:
+            return m
+    return 0.50
 
 # CALENDAR SPREAD PARAMETERS
 # Nifty weekly expiries were discontinued by NSE in late 2024.
@@ -50,7 +146,7 @@ CAL_MAX_MOVE_PCT_TO_CLOSE = 0.04
 CAL_MAX_OPEN_POSITIONS = 2
 
 # RISK CONTROLS
-VIX_MAX_FOR_IC = 25
+VIX_MAX_FOR_IC = IC_VIX_STANDARD_MAX  # backward compat
 VIX_HIGH_THRESHOLD = 28
 ACCOUNT_DRAWDOWN_SIZE_DOWN = 0.03
 ACCOUNT_DRAWDOWN_STOP = 0.05

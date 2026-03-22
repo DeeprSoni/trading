@@ -297,3 +297,33 @@ class IVCalculator:
         if abs(nifty_monthly_change_pct) < 3 and vix < 18:
             return "SIDEWAYS"
         return "NORMAL"
+
+
+# ── Module-level convenience wrapper ──────────────────────────────────────────
+
+_iv_calc = IVCalculator()
+
+
+def find_iv_from_price(
+    market_price: float,
+    spot: float,
+    strike: float,
+    dte: float,
+    r: float = 0.065,
+    option_type: str = "call",
+) -> float | None:
+    """
+    Solve for implied volatility given a market price.
+
+    Parameters:
+        market_price: observed option price
+        spot: underlying price
+        strike: strike price
+        dte: time to expiry in YEARS (caller should pass days/365)
+        r: risk-free rate (default 6.5%)
+        option_type: "call" or "put"
+
+    Returns IV as decimal (e.g. 0.20 for 20%) or None if solver fails.
+    """
+    opt = "CE" if option_type.lower() == "call" else "PE"
+    return _iv_calc._implied_vol(market_price, spot, strike, dte, r, opt)

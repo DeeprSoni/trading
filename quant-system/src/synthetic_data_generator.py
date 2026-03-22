@@ -7,9 +7,23 @@ to actual Nifty spot price history, with a realistic volatility smile model.
 
 IMPORTANT: This is synthetic data for strategy validation only.
 Before deploying real capital, validate with paper trading or a paid data provider.
+
+DEPRECATED: Use src/data_fetcher_real.py instead — real NSE F&O data from 2018-2024.
+Synthetic generator is retained only for live paper trading simulation
+when real-time data is unavailable.
 """
 
 import logging
+import warnings
+
+warnings.warn(
+    "synthetic_data_generator is DEPRECATED for backtesting. "
+    "Use src/data_fetcher_real.py instead — real NSE F&O data from 2018-2024. "
+    "Synthetic generator is retained only for live paper trading simulation "
+    "when real-time data is unavailable.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 from datetime import datetime, timedelta
 from pathlib import Path
 
