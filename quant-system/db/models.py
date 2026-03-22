@@ -126,3 +126,24 @@ class AlertLog(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     trade = relationship("Trade", back_populates="alerts")
+
+
+class PaperTrade(Base):
+    __tablename__ = "paper_trades"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(DateTime, nullable=False)
+    symbol = Column(String(20), default="NIFTY")
+    action = Column(String(20), nullable=False)  # "entry", "exit", "adjust"
+    strategy = Column(String(20), nullable=False)  # "IC", "CAL", "BWB", "STRANGLE"
+    legs_json = Column(Text)  # JSON: list of {strike, type, side, premium}
+    credit_collected = Column(Float, default=0.0)
+    debit_paid = Column(Float, default=0.0)
+    exit_date = Column(DateTime, nullable=True)
+    exit_credit = Column(Float, nullable=True)
+    realised_pnl = Column(Float, nullable=True)
+    slippage_actual = Column(Float, nullable=True)  # actual fill vs mid
+    status = Column(String(20), default="open")  # "open", "closed", "adjusted"
+    trigger = Column(String(50), nullable=True)  # which gate/signal caused entry
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -16,6 +16,22 @@ import streamlit as st
 from config.settings import (
     TOTAL_CAPITAL, CAPITAL_STRUCTURE, PARKED_YIELD,
     PARKED_CAPITAL_ANNUAL_INCOME, PHASE_1_ACTIVE_CAPITAL,
+    PHASE_3_ACTIVE_CAPITAL,
+    # IC entry gates (v2)
+    IC_IVR_MIN, IC_IV_ABOVE_REALIZED,
+    IC_VIX_STANDARD_MAX, IC_VIX_ELEVATED_MAX, IC_VIX_KILLSWITCH,
+    IC_EVENT_BLACKOUT_DAYS, IC_EVENT_EXPIRY_BLACKOUT_DAYS,
+    IC_SHORT_DELTA, IC_WING_WIDTH_POINTS, IC_MIN_DTE_ENTRY, IC_MAX_DTE_ENTRY,
+    IC_PROFIT_TARGET_PCT, IC_STOP_LOSS_MULTIPLIER, IC_TIME_STOP_DTE,
+    IC_MAX_OPEN_POSITIONS,
+    # CAL parameters
+    CAL_BACK_MONTH_MIN_DTE, CAL_BACK_MONTH_MAX_DTE,
+    CAL_FRONT_MONTH_MIN_DTE, CAL_FRONT_MONTH_MAX_DTE,
+    CAL_PROFIT_TARGET_PCT, CAL_BACK_MONTH_CLOSE_DTE,
+    CAL_MAX_MOVE_PCT_TO_ADJUST, CAL_MAX_MOVE_PCT_TO_CLOSE,
+    CAL_MAX_OPEN_POSITIONS,
+    # Risk controls
+    ACCOUNT_DRAWDOWN_SIZE_DOWN, ACCOUNT_DRAWDOWN_STOP,
 )
 
 st.set_page_config(page_title="Quant Dashboard", layout="wide", initial_sidebar_state="expanded")
@@ -255,6 +271,7 @@ with st.sidebar:
     st.markdown("---")
 
     page = st.radio("", [
+        "Live Market",
         "Overview",
         "Iron Condor",
         "Calendar Spread",
@@ -274,10 +291,234 @@ with st.sidebar:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# PAGE: Live Market
+# ════════════════════════════════════════════════════════════════════════════
+
+if page == "Live Market":
+    st.header("Live Market")
+
+    # ── Section 1: Market Status ──────────────────────────────────────────
+    st.subheader("Market Status")
+
+    ms1, ms2, ms3, ms4 = st.columns(4)
+    ms1.metric("Total Capital", fmt_rs(TOTAL_CAPITAL))
+    ms2.metric("Phase 1 Active", fmt_rs(PHASE_1_ACTIVE_CAPITAL))
+    ms3.metric("Phase 3 Active", fmt_rs(PHASE_3_ACTIVE_CAPITAL))
+    ms4.metric("Parked Yield / yr", fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME))
+
+    # Data Status
+    real_data_path = Path("data/real_data_cache")
+    if real_data_path.exists():
+        parquet_files = list(real_data_path.glob("*.parquet"))
+        csv_files = list(real_data_path.glob("*.csv"))
+        total_cache_files = len(parquet_files) + len(csv_files)
+        st.success(f"Data cache found: **{total_cache_files}** files "
+                   f"({len(parquet_files)} parquet, {len(csv_files)} csv) "
+                   f"in `data/real_data_cache/`")
+    else:
+        st.warning("No real data cache found. Directory `data/real_data_cache/` does not exist. "
+                   "Run the data fetcher to populate market data.")
+
+    # Projected Metrics Table
+    st.markdown("**Projected Metrics (Phase 1-4 targets)**")
+    proj = pd.DataFrame([
+        {"Phase": "Phase 1 -- Nifty IC+CAL", "Active Capital": fmt_rs(PHASE_1_ACTIVE_CAPITAL),
+         "Target ROI": "8-12%", "Target Sharpe": ">1.5", "Max DD": "<5%",
+         "Trades/yr": "50-60", "Monthly Rs": "5,000-7,500"},
+        {"Phase": "Phase 2 -- v2 Adjustments", "Active Capital": fmt_rs(PHASE_1_ACTIVE_CAPITAL),
+         "Target ROI": "11-16%", "Target Sharpe": ">2.0", "Max DD": "<5%",
+         "Trades/yr": "55-65", "Monthly Rs": "7,000-10,000"},
+        {"Phase": "Phase 3 -- BankNifty+FinNifty", "Active Capital": fmt_rs(PHASE_3_ACTIVE_CAPITAL),
+         "Target ROI": "15-20%", "Target Sharpe": ">2.0", "Max DD": "<7%",
+         "Trades/yr": "80-100", "Monthly Rs": "9,500-12,500"},
+        {"Phase": "Phase 4 -- Compounding", "Active Capital": fmt_rs(PHASE_3_ACTIVE_CAPITAL),
+         "Target ROI": "18-21%", "Target Sharpe": ">2.0", "Max DD": "<8%",
+         "Trades/yr": "90-110", "Monthly Rs": "11,000-13,000"},
+    ])
+    st.dataframe(proj, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ── Section 2: Entry Signal Check ─────────────────────────────────────
+    st.subheader("Entry Signal Check")
+
+    ec1, ec2 = st.columns(2)
+
+    with ec1:
+        st.markdown("**Iron Condor v2 Entry Gates**")
+        ic_gates = pd.DataFrame([
+            {"Gate": "1. IV Rank", "Check": "IVR >= threshold",
+             "Threshold": f"{IC_IVR_MIN}",
+             "Detail": "IV rank must be above median; relaxed from 30 to 20"},
+            {"Gate": "2. IV vs Realized", "Check": "IV > realized * (1 + buffer)",
+             "Threshold": f"{IC_IV_ABOVE_REALIZED:.0%}",
+             "Detail": "IV must be 15% above 30-day realized vol"},
+            {"Gate": "3. VIX Standard", "Check": "VIX < max for full size",
+             "Threshold": f"{IC_VIX_STANDARD_MAX}",
+             "Detail": "Below: standard wings + full size"},
+            {"Gate": "4. VIX Elevated", "Check": "VIX < max for half size",
+             "Threshold": f"{IC_VIX_ELEVATED_MAX}",
+             "Detail": "25-35: wider wings + half size"},
+            {"Gate": "5. VIX Kill Switch", "Check": "VIX < panic threshold",
+             "Threshold": f"{IC_VIX_KILLSWITCH}",
+             "Detail": "Above 40: no new ICs (genuine panic)"},
+            {"Gate": "6. Event Blackout", "Check": "No major event within N days",
+             "Threshold": f"{IC_EVENT_BLACKOUT_DAYS}d entry / {IC_EVENT_EXPIRY_BLACKOUT_DAYS}d expiry",
+             "Detail": "Avoid entries near RBI, budget, elections"},
+            {"Gate": "7. Max Positions", "Check": "Open ICs < max",
+             "Threshold": f"{IC_MAX_OPEN_POSITIONS}",
+             "Detail": "Concurrent IC position limit"},
+            {"Gate": "8. Drawdown Gate", "Check": "Account DD < stop level",
+             "Threshold": f"{ACCOUNT_DRAWDOWN_SIZE_DOWN:.0%} size-down / {ACCOUNT_DRAWDOWN_STOP:.0%} stop",
+             "Detail": "Auto size-down at 3% DD, full stop at 5%"},
+        ])
+        st.dataframe(ic_gates, use_container_width=True, hide_index=True)
+
+        with st.expander("IC Trade Parameters"):
+            ip1, ip2, ip3 = st.columns(3)
+            ip1.metric("Short Delta", f"{IC_SHORT_DELTA}")
+            ip2.metric("Wing Width", f"{IC_WING_WIDTH_POINTS} pts")
+            ip3.metric("DTE Range", f"{IC_MIN_DTE_ENTRY}-{IC_MAX_DTE_ENTRY}")
+            ip4, ip5, ip6 = st.columns(3)
+            ip4.metric("Profit Target", f"{IC_PROFIT_TARGET_PCT:.0%}")
+            ip5.metric("Stop Loss", f"{IC_STOP_LOSS_MULTIPLIER}x")
+            ip6.metric("Time Stop", f"{IC_TIME_STOP_DTE} DTE")
+
+    with ec2:
+        st.markdown("**Calendar Spread v2 Entry Gates**")
+        cal_gates = pd.DataFrame([
+            {"Gate": "1. Front Month DTE", "Check": "Front DTE in range",
+             "Threshold": f"{CAL_FRONT_MONTH_MIN_DTE}-{CAL_FRONT_MONTH_MAX_DTE} DTE",
+             "Detail": "Monthly front month (weeklies discontinued)"},
+            {"Gate": "2. Back Month DTE", "Check": "Back DTE in range",
+             "Threshold": f"{CAL_BACK_MONTH_MIN_DTE}-{CAL_BACK_MONTH_MAX_DTE} DTE",
+             "Detail": "Back month 60-75 DTE for theta decay"},
+            {"Gate": "3. Move to Adjust", "Check": "Spot move < adjust threshold",
+             "Threshold": f"{CAL_MAX_MOVE_PCT_TO_ADJUST:.0%}",
+             "Detail": "Recentre if spot moves >2% from strike"},
+            {"Gate": "4. Move to Close", "Check": "Spot move < close threshold",
+             "Threshold": f"{CAL_MAX_MOVE_PCT_TO_CLOSE:.0%}",
+             "Detail": "Close if spot moves >4% (unrecoverable)"},
+            {"Gate": "5. Profit Target", "Check": "Spread value >= target",
+             "Threshold": f"{CAL_PROFIT_TARGET_PCT:.0%}",
+             "Detail": "Take profit at 50% of max gain"},
+            {"Gate": "6. Back Close DTE", "Check": "Close back month before expiry",
+             "Threshold": f"{CAL_BACK_MONTH_CLOSE_DTE} DTE",
+             "Detail": "Close back leg at 25 DTE to avoid gamma"},
+            {"Gate": "7. Max Positions", "Check": "Open CALs < max",
+             "Threshold": f"{CAL_MAX_OPEN_POSITIONS}",
+             "Detail": "Concurrent calendar position limit"},
+            {"Gate": "8. Drawdown Gate", "Check": "Account DD < stop level",
+             "Threshold": f"{ACCOUNT_DRAWDOWN_SIZE_DOWN:.0%} size-down / {ACCOUNT_DRAWDOWN_STOP:.0%} stop",
+             "Detail": "Same account-level risk controls as IC"},
+        ])
+        st.dataframe(cal_gates, use_container_width=True, hide_index=True)
+
+        with st.expander("CAL Trade Parameters"):
+            cp1, cp2 = st.columns(2)
+            cp1.metric("Front DTE", f"{CAL_FRONT_MONTH_MIN_DTE}-{CAL_FRONT_MONTH_MAX_DTE}")
+            cp2.metric("Back DTE", f"{CAL_BACK_MONTH_MIN_DTE}-{CAL_BACK_MONTH_MAX_DTE}")
+            cp3, cp4 = st.columns(2)
+            cp3.metric("Adjust Threshold", f"{CAL_MAX_MOVE_PCT_TO_ADJUST:.0%}")
+            cp4.metric("Close Threshold", f"{CAL_MAX_MOVE_PCT_TO_CLOSE:.0%}")
+
+    st.markdown("---")
+
+    # ── Section 3: Strategy Summary ───────────────────────────────────────
+    st.subheader("Strategy Summary (from sweep)")
+
+    ic_best_lm = best_config(ic_data, slippage) if ic_data else None
+    cal_best_lm = best_config(cal_data, slippage) if cal_data else None
+    comb_best_lm = best_config(combined_data, slippage) if combined_data else None
+
+    sc1, sc2, sc3 = st.columns(3)
+
+    with sc1:
+        st.markdown("**Iron Condor**")
+        if ic_best_lm:
+            st.metric("Net P&L", fmt_rs(ic_best_lm.get("total_net_pnl", 0)))
+            st.metric("Sharpe", f"{ic_best_lm.get('sharpe_ratio', 0):.2f}")
+            st.metric("Win Rate", f"{ic_best_lm.get('win_rate', 0):.0%}")
+            st.metric("Max DD", f"{ic_best_lm.get('max_drawdown_pct', 0):.1%}")
+            st.metric("Trades", ic_best_lm.get("total_trades", 0))
+            st.caption(ic_best_lm.get("strategy_name", ""))
+        else:
+            st.info("No IC sweep data.")
+
+    with sc2:
+        st.markdown("**Calendar Spread**")
+        if cal_best_lm:
+            st.metric("Net P&L", fmt_rs(cal_best_lm.get("total_net_pnl", 0)))
+            st.metric("Sharpe", f"{cal_best_lm.get('sharpe_ratio', 0):.2f}")
+            st.metric("Win Rate", f"{cal_best_lm.get('win_rate', 0):.0%}")
+            st.metric("Max DD", f"{cal_best_lm.get('max_drawdown_pct', 0):.1%}")
+            st.metric("Trades", cal_best_lm.get("total_trades", 0))
+            st.caption(cal_best_lm.get("strategy_name", ""))
+        else:
+            st.info("No CAL sweep data.")
+
+    with sc3:
+        st.markdown("**Combined IC+CAL**")
+        if comb_best_lm:
+            st.metric("Net P&L", fmt_rs(comb_best_lm.get("total_net_pnl", 0)))
+            st.metric("Sharpe", f"{comb_best_lm.get('sharpe_ratio', 0):.2f}")
+            st.metric("Win Rate", f"{comb_best_lm.get('win_rate', 0):.0%}")
+            st.metric("Max DD", f"{comb_best_lm.get('max_drawdown_pct', 0):.1%}")
+            st.metric("Trades", comb_best_lm.get("total_trades", 0))
+            alloc = f"IC{comb_best_lm.get('ic_allocation_pct', 50)}/CAL{comb_best_lm.get('cal_allocation_pct', 50)}"
+            st.caption(f"{alloc} | {comb_best_lm.get('strategy_name', '')}")
+        else:
+            st.info("No combined sweep data.")
+
+    st.markdown("---")
+
+    # ── Section 4: Paper Trading Log ──────────────────────────────────────
+    st.subheader("Paper Trading Log")
+
+    try:
+        from db.models import PaperTrade
+        from db import engine
+        from sqlalchemy.orm import Session as SASession
+        from sqlalchemy import select, inspect
+
+        inspector = inspect(engine)
+        if inspector.has_table("paper_trades"):
+            with SASession(engine) as session:
+                trades_q = session.execute(
+                    select(PaperTrade).order_by(PaperTrade.date.desc()).limit(20)
+                ).scalars().all()
+
+            if trades_q:
+                pt_rows = []
+                for pt in trades_q:
+                    pt_rows.append({
+                        "Date": pt.date.strftime("%Y-%m-%d %H:%M") if pt.date else "",
+                        "Symbol": pt.symbol or "",
+                        "Strategy": pt.strategy or "",
+                        "Action": pt.action or "",
+                        "Credit": fmt_rs(pt.credit_collected) if pt.credit_collected else "-",
+                        "Debit": fmt_rs(pt.debit_paid) if pt.debit_paid else "-",
+                        "P&L": fmt_rs(pt.realised_pnl) if pt.realised_pnl is not None else "-",
+                        "Status": pt.status or "",
+                        "Trigger": pt.trigger or "",
+                    })
+                st.dataframe(pd.DataFrame(pt_rows), use_container_width=True, hide_index=True)
+                st.caption(f"Showing last {len(pt_rows)} paper trades")
+            else:
+                st.info("Paper trading table exists but has no trades yet. "
+                        "Run the paper trading module to log simulated entries.")
+        else:
+            st.info("Paper trading not yet started. "
+                    "The `paper_trades` table will be created when the paper trading module runs.")
+    except Exception as e:
+        st.info(f"Paper trading not yet started. ({type(e).__name__}: {e})")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # PAGE: Overview
 # ════════════════════════════════════════════════════════════════════════════
 
-if page == "Overview":
+elif page == "Overview":
     st.header("Overview")
 
     # ── Status Banner ──
