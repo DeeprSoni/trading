@@ -184,12 +184,11 @@ class CalBacktestAdapter:
         return ExitDecision(False, "NONE", "MONITOR", "Within parameters", close_cost)
 
     def should_adjust(self, position: Position, state: MarketState) -> AdjustmentDecision:
-        """Calendar adjustment logic per PRD:
+        """Calendar adjustment logic — v2 engine handles all adjustments.
 
-        1. IV harvest — back month IV expanded 30%+ from entry → close entire position
-        2. Front month roll at 3 DTE — roll to next monthly expiry
-        3. Front month roll at 50% profit — lock in theta, sell next month
-        4. Recentre on 2% move — close old front, sell new ATM front
+        Kept here: IV harvest (needs back_iv_at_entry from metadata), recentre, large-move close.
+        Removed: old DTE<=3 front roll and 50% decay roll (v2 engine handles at DTE<=6, 60% decay).
+        Added via v2: early profit close, diagonal convert, add second calendar.
         """
         p = self._params
         chain = state.option_chain
@@ -203,7 +202,7 @@ class CalBacktestAdapter:
         if last_adj and last_adj == state.date.isoformat():
             return AdjustmentDecision(False, "NONE", reason="Already adjusted today")
 
-        # 1. IV Harvest — back month IV expanded 30%+
+        # IV Harvest — back month IV expanded 30%+ (needs metadata, kept here)
         entry_iv = position.metadata.get("back_iv_at_entry", 0)
         if entry_iv > 0:
             current_iv = self._get_iv_by_expiry(
@@ -221,32 +220,12 @@ class CalBacktestAdapter:
                         close_cost=close_cost,
                     )
 
-        # 2. Front month roll at DTE threshold
-        front_dte = (front_leg.expiry_date - state.date).days
-        if front_dte <= p["front_roll_dte"]:
-            return self._roll_front_month(
-                position, state, front_leg, back_leg,
-                f"Front month at {front_dte} DTE <= {p['front_roll_dte']} — rolling",
-            )
-
-        # 3. Front month roll at 50% profit
-        front_current = self._get_mid_by_expiry(
-            chain, front_leg.strike, front_leg.option_type, front_leg.expiry_date,
-        )
-        if front_leg.premium > 0:
-            front_decay = 1 - (front_current / front_leg.premium)
-            if front_decay >= p["front_profit_roll_pct"]:
-                return self._roll_front_month(
-                    position, state, front_leg, back_leg,
-                    f"Front month decayed {front_decay:.0%} >= {p['front_profit_roll_pct']:.0%} — rolling",
-                )
-
-        # 4. Recentre on 2% move
+        # Recentre on 2% move (kept — needs strike from metadata)
         move_pct = abs(state.underlying_price - strike) / strike if strike > 0 else 0
         if move_pct >= p["move_pct_to_adjust"] and move_pct < p["move_pct_to_close"]:
             return self._recentre(position, state, front_leg, back_leg, move_pct)
 
-        # 5-8. V2 adjustment checks: diagonal, early profit, add second calendar
+        # All other adjustments via v2 engine (front roll, early profit, diagonal, add cal)
         v2_result = self._check_v2_adjustments(
             position, state, front_leg, back_leg, strike,
         )
@@ -294,14 +273,14 @@ class CalBacktestAdapter:
         front_dte = (front_leg.expiry_date - state.date).days
         back_dte = (back_leg.expiry_date - state.date).days
 
-        # Skip checks already handled above (large move, back near, IV harvest,
-        # front roll, recentre)
+        # Skip checks handled above; enable front roll and other v2 checks
         cfg = CALAdjustmentConfig(
-            large_move_pct=999.0,
-            back_close_dte=0,
-            iv_harvest_trigger=999.0,
-            front_roll_dte=0,
-            full_recentre_pct=999.0,
+            large_move_pct=999.0,       # handled by should_exit (4% move close)
+            back_close_dte=0,           # handled by should_exit
+            iv_harvest_trigger=999.0,   # handled above (needs metadata)
+            full_recentre_pct=999.0,    # handled above (needs strike from metadata)
+            # Enabled: front_roll_dte=6, front_decay_threshold=0.60,
+            #          early_profit, diagonal, add_second_cal
         )
 
         action = evaluate_cal_adjustment(cal_pos, state.underlying_price, front_dte, back_dte, cfg)
@@ -319,6 +298,13 @@ class CalBacktestAdapter:
         """Map CALAdjustment enum to AdjustmentDecision."""
         chain = state.option_chain
         expiry = front_leg.expiry_date
+
+        if action == CALAdjustment.FRONT_ROLL:
+            # v2 front roll at DTE<=6 and 60% decay
+            return self._roll_front_month(
+                position, state, front_leg, back_leg,
+                f"v2: Front month roll (DTE or decay threshold met)",
+            )
 
         if action == CALAdjustment.EARLY_PROFIT_CLOSE:
             close_legs = self._make_exit_legs(position, state)

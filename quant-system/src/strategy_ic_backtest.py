@@ -45,10 +45,11 @@ class ICBacktestAdapter:
             "time_stop_dte": p.get("time_stop_dte", settings.IC_TIME_STOP_DTE),
             "max_open_positions": p.get("max_open_positions", settings.IC_MAX_OPEN_POSITIONS),
             "max_pct_capital": p.get("max_pct_capital", settings.IC_MAX_PCT_CAPITAL_PER_TRADE),
-            "lot_size": p.get("lot_size", settings.NIFTY_LOT_SIZE),
+            "lot_size": p.get("lot_size", settings.NIFTY_LOT_SIZE),  # 75 (updated from 25)
             "min_premium": p.get("min_premium", 50),  # Min viable: Rs 50/unit covers costs at 4 legs * ~Rs 350/leg
         }
         self._last_exit_date = None  # cooldown tracking
+        self._last_exit_reason = None  # for variable cooldown
 
     @property
     def name(self) -> str:
@@ -69,9 +70,16 @@ class ICBacktestAdapter:
             return False
         if state.india_vix > p["max_vix"]:
             return False
-        # Cooldown: don't re-enter within 5 days of last exit
-        if self._last_exit_date and (state.date - self._last_exit_date).days < 5:
-            return False
+        # Variable cooldown based on exit reason
+        if self._last_exit_date:
+            cooldown_map = {
+                "PROFIT_TARGET": 2,
+                "STOP_LOSS": 7,
+                "TIME_STOP": 1,
+            }
+            cooldown_days = cooldown_map.get(self._last_exit_reason, 2)
+            if (state.date - self._last_exit_date).days < cooldown_days:
+                return False
         dte = self._best_dte(state)
         if dte is None:
             return False
@@ -168,6 +176,7 @@ class ICBacktestAdapter:
         stop_threshold = entry_premium * p["stop_loss_multiplier"]
         if close_cost >= stop_threshold:
             self._last_exit_date = state.date
+            self._last_exit_reason = "STOP_LOSS"
             exit_legs = self._make_exit_legs(position, state)
             # Use capped close cost: real system would exit at exactly the
             # stop threshold via intraday monitoring, not at end-of-day price
@@ -177,20 +186,28 @@ class ICBacktestAdapter:
                 stop_threshold, exit_legs,
             )
 
-        # 2. TIME STOP
+        # 2. TIME STOP — check for roll-for-duration before exiting
         if dte <= p["time_stop_dte"]:
-            self._last_exit_date = state.date
-            exit_legs = self._make_exit_legs(position, state)
-            return ExitDecision(
-                True, "TIME_STOP", "TODAY",
-                f"{dte} DTE <= {p['time_stop_dte']} time stop",
-                close_cost, exit_legs,
-            )
+            # Roll for duration: if profitable AND not rolled yet, defer to should_adjust
+            if (close_cost < entry_premium
+                    and position.metadata.get("duration_rolls", 0) == 0):
+                # Don't exit — let should_adjust handle the ROLL_FOR_DURATION
+                pass
+            else:
+                self._last_exit_date = state.date
+                self._last_exit_reason = "TIME_STOP"
+                exit_legs = self._make_exit_legs(position, state)
+                return ExitDecision(
+                    True, "TIME_STOP", "TODAY",
+                    f"{dte} DTE <= {p['time_stop_dte']} time stop",
+                    close_cost, exit_legs,
+                )
 
         # 3. PROFIT TARGET
         profit_pct = 1 - (close_cost / entry_premium) if entry_premium > 0 else 0
         if profit_pct >= p["profit_target_pct"]:
             self._last_exit_date = state.date
+            self._last_exit_reason = "PROFIT_TARGET"
             exit_legs = self._make_exit_legs(position, state)
             return ExitDecision(
                 True, "PROFIT_TARGET", "TODAY",
@@ -201,6 +218,7 @@ class ICBacktestAdapter:
         # 4. EXPIRY (last day)
         if dte <= 0:
             self._last_exit_date = state.date
+            self._last_exit_reason = "EXPIRY"
             exit_legs = self._make_exit_legs(position, state)
             return ExitDecision(
                 True, "EXPIRY", "IMMEDIATE",
@@ -210,23 +228,36 @@ class ICBacktestAdapter:
         return ExitDecision(False, "NONE", "MONITOR", "Within parameters", close_cost)
 
     def should_adjust(self, position: Position, state: MarketState) -> AdjustmentDecision:
-        """IC adjustment logic v2 — priority-ordered checks:
+        """IC adjustment logic — v2 engine handles all adjustments.
 
-        1. DTE < 10 → hard close (gamma risk too high to adjust)
-        2. Short strike within 300 pts of underlying → roll tested side further OTM
-        3. While rolling, if opposite side at 85%+ profit → harvest it
-        4-8. V2 adjustments: wing removal, partial close, roll untested, defensive roll, iron fly
+        DTE < 10 → hard close (gamma risk, handled here before v2)
+        All other adjustments: delegated to adjustments_ic.evaluate_ic_adjustment()
         """
         chain = state.option_chain
         expiry = position.legs[0].expiry_date
         dte = (expiry - state.date).days
 
-        # Limit to one adjustment per day (avoid re-triggering on same day)
+        # Limit to one adjustment per day
         last_adj = position.metadata.get("last_adjustment_date")
         if last_adj and last_adj == state.date.isoformat():
             return AdjustmentDecision(False, "NONE", reason="Already adjusted today")
 
-        # 1. DTE < 10: hard close — gamma risk
+        # Roll for duration: at time stop, profitable, not yet rolled
+        entry_premium = position.net_premium_per_unit
+        close_cost = self.reprice_position(position, state)
+        if (dte <= self._params["time_stop_dte"]
+                and close_cost < entry_premium
+                and position.metadata.get("duration_rolls", 0) == 0):
+            # Close current and roll to next monthly expiry
+            close_legs = self._make_exit_legs(position, state)
+            return AdjustmentDecision(
+                should_adjust=True, action="ROLL_FOR_DURATION",
+                close_legs=close_legs, new_legs=[],
+                reason=f"DTE {dte} <= {self._params['time_stop_dte']} but profitable — rolling for duration",
+                close_cost=close_cost,
+            )
+
+        # DTE < 10: hard close — gamma risk too high for any adjustment
         if dte < 10:
             close_legs = self._make_exit_legs(position, state)
             close_cost = self.reprice_position(position, state)
@@ -252,22 +283,7 @@ class ICBacktestAdapter:
         if not all([short_call, short_put, long_call, long_put]):
             return AdjustmentDecision(False, "NONE", reason="IC: incomplete legs")
 
-        underlying = state.underlying_price
-        breach_dist = 300
-
-        # 2. Call side tested (distance-based roll)
-        if (short_call.strike - underlying) <= breach_dist:
-            return self._roll_call_side(
-                position, state, short_call, long_call, short_put, long_put,
-            )
-
-        # 3. Put side tested (distance-based roll)
-        if (underlying - short_put.strike) <= breach_dist:
-            return self._roll_put_side(
-                position, state, short_call, long_call, short_put, long_put,
-            )
-
-        # 4-8. V2 adjustment engine — additional checks
+        # All adjustments via v2 engine
         v2_result = self._check_v2_adjustments(
             position, state, short_call, short_put, long_call, long_put, dte,
         )
@@ -326,11 +342,12 @@ class ICBacktestAdapter:
         sc_delta = self._get_leg_delta(chain, short_call, state, dte)
         sp_delta = self._get_leg_delta(chain, short_put, state, dte)
 
-        # Configure: skip stop/profit/time checks (handled by should_exit + DTE<10 above)
+        # Skip stop/profit/time checks (handled by should_exit + DTE<10 above)
+        # But enable all v2 adjustment types including defensive roll and partial close
         cfg = ICAdjustmentConfig(
-            stop_loss_multiplier=999.0,
-            profit_target_pct=999.0,
-            time_stop_dte=0,
+            stop_loss_multiplier=999.0,   # handled by should_exit
+            profit_target_pct=999.0,      # handled by should_exit
+            time_stop_dte=0,              # handled by should_exit
         )
 
         action = evaluate_ic_adjustment(

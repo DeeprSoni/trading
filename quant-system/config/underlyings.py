@@ -10,7 +10,7 @@ UNDERLYINGS = {
     "NIFTY": {
         "symbol":             "NIFTY",
         "yfinance_ticker":    "^NSEI",
-        "lot_size":           25,
+        "lot_size":           75,
         "tick_size":          0.05,
         "expiry_type":        "monthly",   # weeklies discontinued late 2024
         "active_from_phase":  1,           # available from Phase 1

@@ -341,3 +341,81 @@ class TestParamVariations:
         })
         assert adapter.params["move_pct_to_adjust"] == 0.01
         assert "CAL" in adapter.name
+
+
+# --- Variable Cooldown by Exit Reason ---
+
+class TestCooldownByExitReason:
+    def test_cooldown_by_exit_reason(self, chain):
+        """Cooldown should vary based on exit reason:
+        PROFIT_TARGET: 2 days, STOP_LOSS: 7 days, TIME_STOP: 1 day."""
+        adapter = _make_ic_adapter()
+        state = _make_state(chain)
+
+        # Simulate PROFIT_TARGET exit — should allow entry after 2 days
+        adapter._last_exit_date = state.date
+        adapter._last_exit_reason = "PROFIT_TARGET"
+
+        # 1 day later — should be blocked (< 2 days)
+        state_1d = _make_state(chain, date=state.date + timedelta(days=1))
+        assert adapter.should_enter(state_1d) is False
+
+        # 2 days later — should be allowed
+        state_2d = _make_state(chain, date=state.date + timedelta(days=2))
+        assert adapter.should_enter(state_2d) is True
+
+    def test_stop_loss_has_longer_cooldown(self, chain):
+        """STOP_LOSS exit should have 7-day cooldown."""
+        adapter = _make_ic_adapter()
+        state = _make_state(chain)
+
+        adapter._last_exit_date = state.date
+        adapter._last_exit_reason = "STOP_LOSS"
+
+        # 5 days later — should still be blocked (< 7 days)
+        state_5d = _make_state(chain, date=state.date + timedelta(days=5))
+        assert adapter.should_enter(state_5d) is False
+
+        # 7 days later — should be allowed
+        state_7d = _make_state(chain, date=state.date + timedelta(days=7))
+        assert adapter.should_enter(state_7d) is True
+
+    def test_time_stop_has_shortest_cooldown(self, chain):
+        """TIME_STOP exit should have 1-day cooldown."""
+        adapter = _make_ic_adapter()
+        state = _make_state(chain)
+
+        adapter._last_exit_date = state.date
+        adapter._last_exit_reason = "TIME_STOP"
+
+        # Same day — should be blocked
+        assert adapter.should_enter(state) is False
+
+        # 1 day later — should be allowed
+        state_1d = _make_state(chain, date=state.date + timedelta(days=1))
+        assert adapter.should_enter(state_1d) is True
+
+    def test_exit_sets_last_exit_reason(self, chain):
+        """should_exit should set _last_exit_reason alongside _last_exit_date."""
+        adapter = _make_ic_adapter()
+        state = _make_state(chain)
+        pos = _make_ic_position(state, adapter)
+
+        # Trigger stop loss
+        bad_chain = json.loads(json.dumps(chain))
+        for rec in bad_chain["records"]:
+            rec["ltp"] = rec.get("ltp", 100) * 3
+            rec["bid"] = rec.get("bid", 100) * 3
+            rec["ask"] = rec.get("ask", 100) * 3
+
+        bad_state = MarketState(
+            date=state.date + timedelta(days=5),
+            underlying_price=23500,
+            india_vix=28,
+            iv_rank=60,
+            option_chain=bad_chain,
+            expiry_dates=state.expiry_dates,
+        )
+        exit_decision = adapter.should_exit(pos, bad_state)
+        assert exit_decision.exit_type == "STOP_LOSS"
+        assert adapter._last_exit_reason == "STOP_LOSS"

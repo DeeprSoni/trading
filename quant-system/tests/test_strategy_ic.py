@@ -184,3 +184,45 @@ class TestICTradeStructure:
         ts = ic.generate_trade_structure(sample_option_chain, 22500.0)
         expected = ts.net_premium * 2.0
         assert abs(ts.stop_loss_close_price - expected) < 0.01
+
+
+# --- Regime Detection Tests ---
+
+class TestRegimeDetection:
+    def test_bullish_regime(self):
+        import pandas as pd
+        from src.strategy_ic import detect_regime
+        # Rising prices above SMA50
+        prices = pd.Series(list(range(100, 160)))  # steadily rising
+        assert detect_regime(prices) == "BULLISH"
+
+    def test_bearish_regime(self):
+        import pandas as pd
+        from src.strategy_ic import detect_regime
+        # Falling prices below SMA50
+        prices = pd.Series(list(range(160, 100, -1)))  # steadily falling
+        assert detect_regime(prices) == "BEARISH"
+
+    def test_neutral_insufficient_data(self):
+        import pandas as pd
+        from src.strategy_ic import detect_regime
+        prices = pd.Series([100, 101, 102])
+        assert detect_regime(prices) == "NEUTRAL"
+
+    def test_skewed_deltas_bullish(self):
+        from src.strategy_ic import get_skewed_deltas
+        call_d, put_d = get_skewed_deltas("BULLISH")
+        assert call_d == 0.12
+        assert put_d == 0.22
+
+    def test_skewed_deltas_bearish(self):
+        from src.strategy_ic import get_skewed_deltas
+        call_d, put_d = get_skewed_deltas("BEARISH")
+        assert call_d == 0.22
+        assert put_d == 0.12
+
+    def test_skewed_deltas_neutral(self):
+        from src.strategy_ic import get_skewed_deltas
+        call_d, put_d = get_skewed_deltas("NEUTRAL", 0.16)
+        assert call_d == 0.16
+        assert put_d == 0.16

@@ -332,3 +332,31 @@ class TestEdgeCases:
         assert costs.brokerage == 0
         assert costs.stt == 0
         assert costs.total == 0.0
+
+
+class TestAdjustmentCostAccounting:
+    """Bug 3: Verify adjustments are not double-charged."""
+
+    def test_adjustment_no_double_cost(self):
+        """When a roll closes leg A and opens leg B, cost should be
+        compute_cost(close_A) + compute_cost(open_B), not 2x either."""
+        engine = CostEngine()
+        # Close leg: buy back short call at Rs 100
+        close_leg = LegCostInput(premium=100, side="BUY", lots=1, lot_size=75, bid=99, ask=101)
+        # Open leg: sell new short call at Rs 80
+        open_leg = LegCostInput(premium=80, side="SELL", lots=1, lot_size=75, bid=79, ask=81)
+
+        close_cost = engine.calculate_leg_costs(close_leg)
+        open_cost = engine.calculate_leg_costs(open_leg)
+
+        # Combined via calculate_trade_costs (how backtester calls it)
+        combined = engine.calculate_trade_costs(
+            entry_legs=[],
+            exit_legs=[close_leg, open_leg],
+            net_premium_per_unit=100,
+        )
+
+        # Total should equal sum of individual leg costs, not double
+        individual_total = close_cost.total + open_cost.total
+        assert abs(combined.total_costs - individual_total) < 1.0, \
+            f"Combined {combined.total_costs:.2f} != sum of individual {individual_total:.2f} — possible double-charging"

@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
+
 from config import settings
 from src.exceptions import InvalidTradeStructureError, ExpiryNotFoundError
 from src.iv_calculator import IVCalculator
@@ -367,3 +369,48 @@ class IronCondorStrategy:
         if total_pnl >= 0:
             return 0.0
         return abs(total_pnl) / settings.TOTAL_CAPITAL
+
+
+# ── Regime Detection (v3) ────────────────────────────────────────────────────
+
+def detect_regime(spot_history: pd.Series) -> str:
+    """
+    Detect market regime from spot price history.
+
+    BULLISH: 20-day SMA rising AND price above 50-day SMA
+    BEARISH: 20-day SMA falling AND price below 50-day SMA
+    NEUTRAL: everything else
+
+    Requires at least 50 data points.
+    """
+    if len(spot_history) < 50:
+        return "NEUTRAL"
+
+    sma20 = spot_history.rolling(20).mean()
+    sma50 = spot_history.rolling(50).mean()
+    spot = spot_history.iloc[-1]
+    sma20_rising = sma20.iloc[-1] > sma20.iloc[-2]
+    sma20_falling = sma20.iloc[-1] < sma20.iloc[-2]
+
+    if spot > sma50.iloc[-1] and sma20_rising:
+        return "BULLISH"
+    if spot < sma50.iloc[-1] and sma20_falling:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def get_skewed_deltas(regime: str, base_delta: float = 0.16) -> tuple[float, float]:
+    """
+    Get regime-aware call/put deltas for Iron Condor.
+
+    In BULLISH: tighter call (0.12), wider put (0.22) — collect more on the side market won't go.
+    In BEARISH: wider call (0.22), tighter put (0.12) — same logic, reversed.
+    In NEUTRAL: symmetric (base_delta, base_delta).
+
+    Returns (call_delta, put_delta).
+    """
+    if regime == "BULLISH":
+        return (0.12, 0.22)
+    if regime == "BEARISH":
+        return (0.22, 0.12)
+    return (base_delta, base_delta)

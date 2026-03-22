@@ -1,9 +1,14 @@
 """
 Run parameter sweeps and save results for the dashboard.
 
-Usage: python run_sweep.py
+Usage:
+  python run_sweep.py                                    # Synthetic data (original)
+  python run_sweep.py --use-real-data                    # Real NSE data (all strategies)
+  python run_sweep.py --strategy IC --use-real-data      # IC only, real data
+  python run_sweep.py --underlying BANKNIFTY --use-real-data  # BankNifty sweep
 """
 
+import argparse
 import json
 import logging
 import sys
@@ -30,7 +35,11 @@ from src.models import BacktestResult, MarketState
 from src.param_sweep import ParamSweepEngine, SweepConfig
 from src.strategy_cal_backtest import CalBacktestAdapter
 from src.strategy_ic_backtest import ICBacktestAdapter
-from src.synthetic_data_generator import SyntheticDataGenerator
+
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    from src.synthetic_data_generator import SyntheticDataGenerator
 
 
 def generate_market_states(hist_csv: str, max_days: int = 500) -> list[MarketState]:
@@ -209,18 +218,44 @@ def result_to_dict(r: BacktestResult) -> dict:
 
 
 def run_ic_sweep(states, slippage_models):
-    """Run Iron Condor parameter sweep — centered on PRD parameters."""
+    """Run Iron Condor parameter sweep — v2 expanded grid."""
     grid = {
-        "short_delta": [0.16, 0.20, 0.25],         # Higher delta = higher premium; PRD baseline: 0.16
-        "wing_width": [400, 500, 600],               # PRD baseline: 500
-        "profit_target_pct": [0.40, 0.50, 0.65],    # PRD baseline: 0.50
-        "stop_loss_multiplier": [1.5, 2.0, 2.5],    # PRD baseline: 2.0
-        "time_stop_dte": [18, 21, 25],               # PRD baseline: 21
+        "short_delta": [0.16, 0.20, 0.25],
+        "wing_width": [400, 500, 600, 700, 800],    # v2: wider range for dynamic wings
+        "profit_target_pct": [0.40, 0.50, 0.65],
+        "stop_loss_multiplier": [1.5, 2.0, 2.5],
+        "time_stop_dte": [18, 21, 25],
+        "min_iv_rank": [20, 25, 30],                 # v2: lowered from fixed 30
     }
     total = 1
     for v in grid.values():
         total *= len(v)
     print(f"\nIC Sweep: {total} combos x {len(slippage_models)} slippage = {total * len(slippage_models)} runs")
+
+    config = SweepConfig(
+        strategy_class=ICBacktestAdapter,
+        param_grid=grid,
+        slippage_models=slippage_models,
+    )
+    sweep = ParamSweepEngine(max_workers=1)
+    return sweep.run_sequential(config, states, rank_by="sharpe_ratio", min_trades=2)
+
+
+def run_banknifty_ic_sweep(states, slippage_models):
+    """Run BankNifty Iron Condor parameter sweep."""
+    grid = {
+        "short_delta": [0.20, 0.25, 0.30],
+        "wing_width": [600, 800, 1000],
+        "profit_target_pct": [0.40, 0.50, 0.60],
+        "stop_loss_multiplier": [2.0, 2.5, 3.0],
+        "time_stop_dte": [14, 21],
+        "min_iv_rank": [20, 25, 30],
+        "lot_size": [30],  # BankNifty lot size
+    }
+    total = 1
+    for v in grid.values():
+        total *= len(v)
+    print(f"\nBankNifty IC Sweep: {total} combos x {len(slippage_models)} slippage = {total * len(slippage_models)} runs")
 
     config = SweepConfig(
         strategy_class=ICBacktestAdapter,
@@ -462,13 +497,172 @@ def generate_combined_results(ic_results, cal_results, capital=750_000):
     return combined
 
 
+def generate_real_market_states(
+    symbol: str = "NIFTY",
+    start_date: str = "2018-01-01",
+    end_date: str = "2024-12-31",
+) -> list[MarketState]:
+    """Generate MarketState objects from real NSE F&O bhavcopy data."""
+    from src.data_fetcher_real import (
+        fetch_fo_date_range, fetch_india_vix, fetch_nifty_spot,
+        build_option_chain, add_implied_volatility,
+    )
+    from config.underlyings import UNDERLYINGS
+
+    underlying_cfg = UNDERLYINGS.get(symbol, UNDERLYINGS["NIFTY"])
+    ticker = underlying_cfg.get("yfinance_ticker", "^NSEI")
+
+    print(f"Loading real data for {symbol}...")
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+    # Load spot data
+    if ticker:
+        spot_df = fetch_nifty_spot(start_date, end_date, ticker)
+    else:
+        print(f"  No yfinance ticker for {symbol}, using bhavcopy futures for spot")
+        spot_df = pd.DataFrame()
+
+    # Load VIX
+    vix_df = fetch_india_vix()
+
+    # Load F&O bhavcopy (cached — fast after first download)
+    bhavcopy = fetch_fo_date_range(start_dt, end_dt, symbols=[symbol])
+
+    if bhavcopy.empty:
+        print("ERROR: No F&O data found. Run scripts/download_real_data.py first.")
+        return []
+
+    print(f"  Loaded {len(bhavcopy):,} option records")
+
+    # Build VIX lookup
+    vix_lookup = {}
+    if not vix_df.empty:
+        for _, row in vix_df.iterrows():
+            vix_lookup[row["Date"].date()] = row.get("Close", 15.0)
+
+    # Build spot lookup
+    spot_lookup = {}
+    if not spot_df.empty:
+        for _, row in spot_df.iterrows():
+            spot_lookup[row["Date"].date()] = row["Close"]
+
+    # Get unique trading dates from bhavcopy
+    trading_dates = sorted(bhavcopy["TIMESTAMP"].dt.date.unique())
+    print(f"  {len(trading_dates)} trading days ({trading_dates[0]} to {trading_dates[-1]})")
+
+    iv_calc = IVCalculator()
+    states = []
+
+    for d in trading_dates:
+        dt = datetime.combine(d, datetime.min.time())
+
+        # Get spot price
+        spot = spot_lookup.get(d)
+        if spot is None or pd.isna(spot):
+            # Fallback: use futures close from bhavcopy
+            fut = bhavcopy[
+                (bhavcopy["TIMESTAMP"].dt.date == d) &
+                (bhavcopy["SYMBOL"] == symbol) &
+                (bhavcopy["INSTRUMENT"].isin(["FUTIDX"]))
+            ]
+            if not fut.empty:
+                spot = float(fut.iloc[0]["CLOSE"])
+            else:
+                continue
+
+        # Get VIX
+        vix = vix_lookup.get(d, 15.0)
+        if pd.isna(vix):
+            vix = 15.0
+
+        # Build option chain from real bhavcopy
+        chain = build_option_chain(bhavcopy, dt, symbol, dte_range=(15, 90))
+        if chain.empty:
+            continue
+
+        # Add IV
+        chain = add_implied_volatility(chain, spot)
+
+        # Get unique expiries
+        expiry_dates = sorted(chain["expiry"].dropna().unique())
+        expiry_strs = [pd.Timestamp(e).isoformat() for e in expiry_dates]
+
+        # Build chain records for the backtester format
+        records = []
+        for _, row in chain.iterrows():
+            iv_val = row.get("iv", 0.20)
+            if pd.isna(iv_val) or iv_val <= 0:
+                iv_val = 0.20
+
+            dte = int(row["dte"])
+            T = max(dte / 365.0, 0.001)
+
+            try:
+                delta = iv_calc._bs_delta(spot, float(row["strike"]), T, 0.065, iv_val, row["option_type"])
+            except Exception:
+                delta = 0.0
+
+            price = float(row["close"]) if not pd.isna(row["close"]) else 0
+            spread = max(0.50, price * 0.015)
+
+            records.append({
+                "strike": int(row["strike"]),
+                "option_type": row["option_type"],
+                "expiry": pd.Timestamp(row["expiry"]).isoformat(),
+                "dte": dte,
+                "ltp": round(price, 2),
+                "bid": round(max(0.05, price - spread / 2), 2),
+                "ask": round(price + spread / 2, 2),
+                "iv": round(iv_val, 4),
+                "delta": round(delta, 4),
+                "oi": int(row.get("open_interest", 0)),
+            })
+
+        if not records:
+            continue
+
+        # IV rank estimation from VIX history
+        iv_rank = min(max(vix * 2.5, 15), 85)
+
+        states.append(MarketState(
+            date=dt,
+            underlying_price=float(spot),
+            india_vix=min(max(vix, 10), 45),
+            iv_rank=iv_rank,
+            option_chain={"records": records},
+            expiry_dates=expiry_strs,
+        ))
+
+        if len(states) % 200 == 0:
+            print(f"  Generated {len(states)} states...")
+
+    print(f"  Total: {len(states)} real market states")
+    return states
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Run parameter sweeps")
+    parser.add_argument("--use-real-data", action="store_true", help="Use real NSE data instead of synthetic")
+    parser.add_argument("--strategy", choices=["IC", "CAL", "COMBINED", "ALL"], default="ALL", help="Which strategy to sweep")
+    parser.add_argument("--underlying", default="NIFTY", help="Underlying symbol (NIFTY, BANKNIFTY)")
+    args = parser.parse_args()
+
     start = time.time()
     output_dir = Path("data/sweep_results")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    hist_csv = "tests/fixtures/sample_historical_prices.csv"
-    states = generate_market_states(hist_csv, max_days=400)
+    suffix = f"_{args.underlying.lower()}_real" if args.use_real_data else ""
+
+    if args.use_real_data:
+        states = generate_real_market_states(
+            symbol=args.underlying,
+            start_date="2018-01-01",
+            end_date="2024-12-31",
+        )
+    else:
+        hist_csv = "tests/fixtures/sample_historical_prices.csv"
+        states = generate_market_states(hist_csv, max_days=400)
 
     if not states:
         print("ERROR: No market states generated.")
@@ -476,80 +670,93 @@ def main():
 
     slippage_models = [SlippageModel.OPTIMISTIC, SlippageModel.REALISTIC, SlippageModel.CONSERVATIVE]
 
+    run_ic = args.strategy in ("IC", "ALL")
+    run_cal = args.strategy in ("CAL", "ALL")
+    run_combined = args.strategy in ("COMBINED", "ALL")
+
     # --- IC Sweep ---
-    ic_sweep = run_ic_sweep(states, slippage_models)
-    print(f"IC: {ic_sweep.completed} completed, {len(ic_sweep.results)} passed filter, {ic_sweep.elapsed_seconds:.1f}s")
+    if not run_ic:
+        ic_sweep = None
+    else:
+            ic_sweep = run_ic_sweep(states, slippage_models)
+        print(f"IC: {ic_sweep.completed} completed, {len(ic_sweep.results)} passed filter, {ic_sweep.elapsed_seconds:.1f}s")
 
-    ic_data = {
-        "sweep_type": "IC",
-        "total_combinations": ic_sweep.total_combinations,
-        "completed": ic_sweep.completed,
-        "elapsed_seconds": ic_sweep.elapsed_seconds,
-        "results": [result_to_dict(r) for r in ic_sweep.results],
-    }
+        ic_data = {
+            "sweep_type": "IC",
+            "total_combinations": ic_sweep.total_combinations,
+            "completed": ic_sweep.completed,
+            "elapsed_seconds": ic_sweep.elapsed_seconds,
+            "results": [result_to_dict(r) for r in ic_sweep.results],
+        }
 
-    if ic_sweep.results:
-        ic_data["top_stats"] = run_stats_on_top(ic_sweep.results, 5)
-        print(f"\nTop 5 IC results:")
-        for i, r in enumerate(ic_sweep.results[:5]):
-            print(f"  {i+1}. {r.strategy_name}: Sharpe={r.sharpe_ratio:.2f}, "
-                  f"Net={r.total_net_pnl:,.0f}, WR={r.win_rate:.0%}, DD={r.max_drawdown_pct:.1%}, "
-                  f"Trades={r.total_trades}")
+        if ic_sweep.results:
+            ic_data["top_stats"] = run_stats_on_top(ic_sweep.results, 5)
+            print(f"\nTop 5 IC results:")
+            for i, r in enumerate(ic_sweep.results[:5]):
+                print(f"  {i+1}. {r.strategy_name}: Sharpe={r.sharpe_ratio:.2f}, "
+                      f"Net={r.total_net_pnl:,.0f}, WR={r.win_rate:.0%}, DD={r.max_drawdown_pct:.1%}, "
+                      f"Trades={r.total_trades}")
 
-    with open(output_dir / "ic_sweep.json", "w") as f:
-        json.dump(ic_data, f, indent=2, default=str)
-    print(f"Saved IC results to {output_dir / 'ic_sweep.json'}")
+        ic_filename = f"ic_sweep{suffix}.json"
+        with open(output_dir / ic_filename, "w") as f:
+            json.dump(ic_data, f, indent=2, default=str)
+        print(f"Saved IC results to {output_dir / ic_filename}")
 
     # --- CAL Sweep ---
-    cal_sweep = run_cal_sweep(states, slippage_models)
-    print(f"CAL: {cal_sweep.completed} completed, {len(cal_sweep.results)} passed filter, {cal_sweep.elapsed_seconds:.1f}s")
+    if not run_cal:
+        cal_sweep = None
+    else:
+        cal_sweep = run_cal_sweep(states, slippage_models)
+        print(f"CAL: {cal_sweep.completed} completed, {len(cal_sweep.results)} passed filter, {cal_sweep.elapsed_seconds:.1f}s")
 
-    cal_data = {
-        "sweep_type": "CAL",
-        "total_combinations": cal_sweep.total_combinations,
-        "completed": cal_sweep.completed,
-        "elapsed_seconds": cal_sweep.elapsed_seconds,
-        "results": [result_to_dict(r) for r in cal_sweep.results],
-    }
+        cal_data = {
+            "sweep_type": "CAL",
+            "total_combinations": cal_sweep.total_combinations,
+            "completed": cal_sweep.completed,
+            "elapsed_seconds": cal_sweep.elapsed_seconds,
+            "results": [result_to_dict(r) for r in cal_sweep.results],
+        }
 
-    if cal_sweep.results:
-        cal_data["top_stats"] = run_stats_on_top(cal_sweep.results, 5)
-        print(f"\nTop 5 CAL results:")
-        for i, r in enumerate(cal_sweep.results[:5]):
-            print(f"  {i+1}. {r.strategy_name}: Sharpe={r.sharpe_ratio:.2f}, "
-                  f"Net={r.total_net_pnl:,.0f}, WR={r.win_rate:.0%}, DD={r.max_drawdown_pct:.1%}, "
-                  f"Trades={r.total_trades}")
+        if cal_sweep.results:
+            cal_data["top_stats"] = run_stats_on_top(cal_sweep.results, 5)
+            print(f"\nTop 5 CAL results:")
+            for i, r in enumerate(cal_sweep.results[:5]):
+                print(f"  {i+1}. {r.strategy_name}: Sharpe={r.sharpe_ratio:.2f}, "
+                      f"Net={r.total_net_pnl:,.0f}, WR={r.win_rate:.0%}, DD={r.max_drawdown_pct:.1%}, "
+                      f"Trades={r.total_trades}")
 
-    with open(output_dir / "cal_sweep.json", "w") as f:
-        json.dump(cal_data, f, indent=2, default=str)
-    print(f"Saved CAL results to {output_dir / 'cal_sweep.json'}")
+        cal_filename = f"cal_sweep{suffix}.json"
+        with open(output_dir / cal_filename, "w") as f:
+            json.dump(cal_data, f, indent=2, default=str)
+        print(f"Saved CAL results to {output_dir / cal_filename}")
 
     # --- Combined IC+CAL ---
-    print("\nGenerating combined IC+CAL results...")
-    combined_results = generate_combined_results(
-        ic_data["results"], cal_data["results"], capital=750_000,
-    )
-    combined_data = {
-        "sweep_type": "COMBINED",
-        "total_combinations": len(combined_results),
-        "results": combined_results,
-    }
+    if run_combined and ic_sweep and cal_sweep:
+        print("\nGenerating combined IC+CAL results...")
+        combined_results = generate_combined_results(
+            ic_data["results"], cal_data["results"], capital=750_000,
+        )
+        combined_data = {
+            "sweep_type": "COMBINED",
+            "total_combinations": len(combined_results),
+            "results": combined_results,
+        }
 
-    # Print top results
-    profitable = [r for r in combined_results if r["total_net_pnl"] > 0]
-    print(f"Combined: {len(combined_results)} combos, {len(profitable)} profitable")
-    if combined_results:
-        print("\nTop 5 Combined results:")
-        for i, r in enumerate(combined_results[:5]):
-            print(f"  {i+1}. IC{r['ic_allocation_pct']}/CAL{r['cal_allocation_pct']} "
-                  f"({r['slippage_model']}): "
-                  f"Sharpe={r['sharpe_ratio']:.2f}, Net={r['total_net_pnl']:,.0f}, "
-                  f"WR={r['win_rate']:.0%}, DD={r['max_drawdown_pct']:.1%}, "
-                  f"Annual={r['annual_return_pct']:.1f}%, Trades={r['total_trades']}")
+        profitable = [r for r in combined_results if r["total_net_pnl"] > 0]
+        print(f"Combined: {len(combined_results)} combos, {len(profitable)} profitable")
+        if combined_results:
+            print("\nTop 5 Combined results:")
+            for i, r in enumerate(combined_results[:5]):
+                print(f"  {i+1}. IC{r['ic_allocation_pct']}/CAL{r['cal_allocation_pct']} "
+                      f"({r['slippage_model']}): "
+                      f"Sharpe={r['sharpe_ratio']:.2f}, Net={r['total_net_pnl']:,.0f}, "
+                      f"WR={r['win_rate']:.0%}, DD={r['max_drawdown_pct']:.1%}, "
+                      f"Annual={r['annual_return_pct']:.1f}%, Trades={r['total_trades']}")
 
-    with open(output_dir / "combined_sweep.json", "w") as f:
-        json.dump(combined_data, f, indent=2, default=str)
-    print(f"Saved combined results to {output_dir / 'combined_sweep.json'}")
+        combined_filename = f"combined_sweep{suffix}.json"
+        with open(output_dir / combined_filename, "w") as f:
+            json.dump(combined_data, f, indent=2, default=str)
+        print(f"Saved combined results to {output_dir / combined_filename}")
 
     elapsed = time.time() - start
     print(f"\nTotal sweep time: {elapsed:.0f}s ({elapsed/60:.1f}m)")
