@@ -1,0 +1,14 @@
+{
+  "events": [
+    {"date": "2025-04-09", "name": "RBI Monetary Policy", "type": "RBI", "blackout_days_before": 5},
+    {"date": "2025-06-06", "name": "RBI Monetary Policy", "type": "RBI", "blackout_days_before": 5},
+    {"date": "2025-08-06", "name": "RBI Monetary Policy", "type": "RBI", "blackout_days_before": 5},
+    {"date": "2025-10-08", "name": "RBI Monetary Policy", "type": "RBI", "blackout_days_before": 5},
+    {"date": "2025-12-05", "name": "RBI Monetary Policy", "type": "RBI", "blackout_days_before": 5},
+    {"date": "2026-02-01", "name": "Union Budget", "type": "BUDGET", "blackout_days_before": 5},
+    {"date": "2026-02-06", "name": "RBI Monetary Policy", "type": "RBI", "blackout_days_before": 5},
+    {"date": "2025-07-30", "name": "US Federal Reserve", "type": "FED", "blackout_days_before": 3},
+    {"date": "2025-09-17", "name": "US Federal Reserve", "type": "FED", "blackout_days_before": 3}
+  ],
+  "note": "Update when RBI announces new dates. Check rbi.org.in for official schedule."
+}

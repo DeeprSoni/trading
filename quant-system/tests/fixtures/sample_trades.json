@@ -1,0 +1,1094 @@
+{
+  "trades": [
+    {
+      "trade_code": "T001",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "SIDEWAYS",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-01-04",
+      "exit_date": "2023-02-16",
+      "days_in_trade": 43,
+      "underlying_at_entry": 17940,
+      "underlying_at_exit": 18438,
+      "entry_premium_per_unit": 113.84,
+      "exit_premium_per_unit": 83.36,
+      "lots": 2,
+      "lot_size": 50,
+      "iv_rank": 34.7,
+      "india_vix_at_entry": 16.39,
+      "entry_iv": 17.74,
+      "exit_iv": 14.93,
+      "gross_pnl": 3427.74,
+      "total_costs": 1214.97,
+      "net_pnl": 3048.08,
+      "max_profit": 9107.2,
+      "max_loss": 31586.67,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 19000,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-02-18"
+        },
+        {
+          "option_type": "CE",
+          "strike": 18500,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-02-18"
+        },
+        {
+          "option_type": "PE",
+          "strike": 17400,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-02-18"
+        },
+        {
+          "option_type": "PE",
+          "strike": 16900,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-02-18"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T002",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "NORMAL",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-01-20",
+      "exit_date": "2023-02-05",
+      "days_in_trade": 16,
+      "underlying_at_entry": 18009,
+      "underlying_at_exit": 18493,
+      "entry_premium_per_unit": 138.35,
+      "exit_premium_per_unit": 74.7,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 35.4,
+      "india_vix_at_entry": 15.41,
+      "entry_iv": 16.89,
+      "exit_iv": 15.54,
+      "gross_pnl": 3426.41,
+      "total_costs": 1469.23,
+      "net_pnl": 3182.65,
+      "max_profit": 5534.0,
+      "max_loss": 15565.02,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 18900,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-03-06"
+        },
+        {
+          "option_type": "CE",
+          "strike": 18400,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-03-06"
+        },
+        {
+          "option_type": "PE",
+          "strike": 17500,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-03-06"
+        },
+        {
+          "option_type": "PE",
+          "strike": 17000,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-03-06"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T003",
+      "underlying": "NIFTY",
+      "strategy": "CAL",
+      "status": "CLOSED",
+      "market_regime": "SIDEWAYS",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-02-04",
+      "exit_date": "2023-04-05",
+      "days_in_trade": 60,
+      "underlying_at_entry": 18304,
+      "underlying_at_exit": 18084,
+      "entry_premium_per_unit": 89.08,
+      "exit_premium_per_unit": 63.51,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 32.0,
+      "india_vix_at_entry": 15.27,
+      "entry_iv": 14.19,
+      "exit_iv": 16.55,
+      "gross_pnl": 2228.83,
+      "total_costs": 1299.05,
+      "net_pnl": 1278.46,
+      "max_profit": 3563.2,
+      "max_loss": 13411.92,
+      "legs": [
+        {
+          "option_type": "PE",
+          "strike": 18300,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-03-06"
+        },
+        {
+          "option_type": "PE",
+          "strike": 18300,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-04-05"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T004",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "HIGH_VOL",
+      "exit_reason": "STOP_LOSS",
+      "entry_date": "2023-02-18",
+      "exit_date": "2023-03-16",
+      "days_in_trade": 26,
+      "underlying_at_entry": 18021,
+      "underlying_at_exit": 18001,
+      "entry_premium_per_unit": 109.85,
+      "exit_premium_per_unit": 225.0,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 61.9,
+      "india_vix_at_entry": 24.9,
+      "entry_iv": 25.41,
+      "exit_iv": 22.59,
+      "gross_pnl": -5091.69,
+      "total_costs": 867.6,
+      "net_pnl": -5757.56,
+      "max_profit": 4394.0,
+      "max_loss": 11092.8,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 18900,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-04-04"
+        },
+        {
+          "option_type": "CE",
+          "strike": 18400,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-04-04"
+        },
+        {
+          "option_type": "PE",
+          "strike": 17500,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-04-04"
+        },
+        {
+          "option_type": "PE",
+          "strike": 17000,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-04-04"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T005",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "SIDEWAYS",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-03-20",
+      "exit_date": "2023-04-14",
+      "days_in_trade": 25,
+      "underlying_at_entry": 18589,
+      "underlying_at_exit": 18141,
+      "entry_premium_per_unit": 116.66,
+      "exit_premium_per_unit": 105.23,
+      "lots": 2,
+      "lot_size": 50,
+      "iv_rank": 33.5,
+      "india_vix_at_entry": 15.85,
+      "entry_iv": 15.09,
+      "exit_iv": 17.25,
+      "gross_pnl": 4446.9,
+      "total_costs": 1385.63,
+      "net_pnl": 1143.35,
+      "max_profit": 9332.8,
+      "max_loss": 28650.59,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 19400,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-05-04"
+        },
+        {
+          "option_type": "CE",
+          "strike": 18900,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-05-04"
+        },
+        {
+          "option_type": "PE",
+          "strike": 18300,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-05-04"
+        },
+        {
+          "option_type": "PE",
+          "strike": 17800,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-05-04"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T006",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "NORMAL",
+      "exit_reason": "TIME_STOP",
+      "entry_date": "2023-03-16",
+      "exit_date": "2023-04-01",
+      "days_in_trade": 16,
+      "underlying_at_entry": 18376,
+      "underlying_at_exit": 17916,
+      "entry_premium_per_unit": 97.6,
+      "exit_premium_per_unit": 70.5,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 46.3,
+      "india_vix_at_entry": 13.47,
+      "entry_iv": 13.09,
+      "exit_iv": 12.71,
+      "gross_pnl": 2970.07,
+      "total_costs": 779.88,
+      "net_pnl": 1355.12,
+      "max_profit": 3904.0,
+      "max_loss": 14488.22,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 19400,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-04-30"
+        },
+        {
+          "option_type": "CE",
+          "strike": 18900,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-04-30"
+        },
+        {
+          "option_type": "PE",
+          "strike": 18000,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-04-30"
+        },
+        {
+          "option_type": "PE",
+          "strike": 17500,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-04-30"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T007",
+      "underlying": "NIFTY",
+      "strategy": "CAL",
+      "status": "CLOSED",
+      "market_regime": "TRENDING",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-04-18",
+      "exit_date": "2023-06-01",
+      "days_in_trade": 44,
+      "underlying_at_entry": 19014,
+      "underlying_at_exit": 19056,
+      "entry_premium_per_unit": 146.83,
+      "exit_premium_per_unit": 87.85,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 37.8,
+      "india_vix_at_entry": 15.34,
+      "entry_iv": 14.75,
+      "exit_iv": 15.25,
+      "gross_pnl": 2333.77,
+      "total_costs": 1092.12,
+      "net_pnl": 2948.93,
+      "max_profit": 5873.2,
+      "max_loss": 21483.44,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 19000,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-05-18"
+        },
+        {
+          "option_type": "CE",
+          "strike": 19000,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-06-17"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T008",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "TRENDING",
+      "exit_reason": "STOP_LOSS",
+      "entry_date": "2023-04-02",
+      "exit_date": "2023-04-29",
+      "days_in_trade": 27,
+      "underlying_at_entry": 18912,
+      "underlying_at_exit": 19210,
+      "entry_premium_per_unit": 132.42,
+      "exit_premium_per_unit": 233.06,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 36.0,
+      "india_vix_at_entry": 15.95,
+      "entry_iv": 15.38,
+      "exit_iv": 17.33,
+      "gross_pnl": -4372.12,
+      "total_costs": 872.86,
+      "net_pnl": -5032.06,
+      "max_profit": 5296.8,
+      "max_loss": 17519.13,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 19900,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-05-17"
+        },
+        {
+          "option_type": "CE",
+          "strike": 19400,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-05-17"
+        },
+        {
+          "option_type": "PE",
+          "strike": 18400,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-05-17"
+        },
+        {
+          "option_type": "PE",
+          "strike": 17900,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-05-17"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T009",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "SIDEWAYS",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-05-17",
+      "exit_date": "2023-06-02",
+      "days_in_trade": 16,
+      "underlying_at_entry": 19427,
+      "underlying_at_exit": 19619,
+      "entry_premium_per_unit": 107.98,
+      "exit_premium_per_unit": 74.69,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 30.0,
+      "india_vix_at_entry": 15.6,
+      "entry_iv": 14.89,
+      "exit_iv": 17.61,
+      "gross_pnl": 2626.22,
+      "total_costs": 732.61,
+      "net_pnl": 1664.59,
+      "max_profit": 4319.2,
+      "max_loss": 15659.53,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 20400,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-07-01"
+        },
+        {
+          "option_type": "CE",
+          "strike": 19900,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-07-01"
+        },
+        {
+          "option_type": "PE",
+          "strike": 19000,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-07-01"
+        },
+        {
+          "option_type": "PE",
+          "strike": 18500,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-07-01"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T010",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "HIGH_VOL",
+      "exit_reason": "ADJUSTED",
+      "entry_date": "2023-05-09",
+      "exit_date": "2023-06-14",
+      "days_in_trade": 36,
+      "underlying_at_entry": 19394,
+      "underlying_at_exit": 19005,
+      "entry_premium_per_unit": 100.52,
+      "exit_premium_per_unit": 72.45,
+      "lots": 2,
+      "lot_size": 50,
+      "iv_rank": 64.5,
+      "india_vix_at_entry": 24.08,
+      "entry_iv": 25.54,
+      "exit_iv": 27.61,
+      "gross_pnl": 2007.92,
+      "total_costs": 1283.51,
+      "net_pnl": 2806.85,
+      "max_profit": 8041.6,
+      "max_loss": 31690.8,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 20200,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-06-23"
+        },
+        {
+          "option_type": "CE",
+          "strike": 19700,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-06-23"
+        },
+        {
+          "option_type": "PE",
+          "strike": 18800,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-06-23"
+        },
+        {
+          "option_type": "PE",
+          "strike": 18300,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-06-23"
+        }
+      ],
+      "adjustments": [
+        {
+          "date": "2023-05-31",
+          "action": "ROLL_UP",
+          "description": "Rolled untested side closer to collect additional premium",
+          "cost": 296.2
+        }
+      ],
+      "notes": ""
+    },
+    {
+      "trade_code": "T011",
+      "underlying": "NIFTY",
+      "strategy": "CAL",
+      "status": "CLOSED",
+      "market_regime": "NORMAL",
+      "exit_reason": "TIME_STOP",
+      "entry_date": "2023-06-14",
+      "exit_date": "2023-07-22",
+      "days_in_trade": 38,
+      "underlying_at_entry": 19468,
+      "underlying_at_exit": 19019,
+      "entry_premium_per_unit": 120.88,
+      "exit_premium_per_unit": 109.5,
+      "lots": 2,
+      "lot_size": 50,
+      "iv_rank": 36.7,
+      "india_vix_at_entry": 16.74,
+      "entry_iv": 17.44,
+      "exit_iv": 16.85,
+      "gross_pnl": 2715.24,
+      "total_costs": 1235.54,
+      "net_pnl": 1137.63,
+      "max_profit": 9670.4,
+      "max_loss": 38209.14,
+      "legs": [
+        {
+          "option_type": "PE",
+          "strike": 19500,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-07-14"
+        },
+        {
+          "option_type": "PE",
+          "strike": 19500,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-08-13"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T012",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "SIDEWAYS",
+      "exit_reason": "STOP_LOSS",
+      "entry_date": "2023-07-14",
+      "exit_date": "2023-08-16",
+      "days_in_trade": 33,
+      "underlying_at_entry": 19892,
+      "underlying_at_exit": 20158,
+      "entry_premium_per_unit": 128.88,
+      "exit_premium_per_unit": 205.12,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 35.2,
+      "india_vix_at_entry": 15.72,
+      "entry_iv": 16.67,
+      "exit_iv": 13.66,
+      "gross_pnl": -2370.34,
+      "total_costs": 1398.96,
+      "net_pnl": -3812.12,
+      "max_profit": 5155.2,
+      "max_loss": 13325.32,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 20900,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-08-28"
+        },
+        {
+          "option_type": "CE",
+          "strike": 20400,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-08-28"
+        },
+        {
+          "option_type": "PE",
+          "strike": 19500,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-08-28"
+        },
+        {
+          "option_type": "PE",
+          "strike": 19000,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-08-28"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T013",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "SIDEWAYS",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-07-03",
+      "exit_date": "2023-07-29",
+      "days_in_trade": 26,
+      "underlying_at_entry": 19977,
+      "underlying_at_exit": 20270,
+      "entry_premium_per_unit": 88.56,
+      "exit_premium_per_unit": 32.19,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 28.7,
+      "india_vix_at_entry": 16.09,
+      "entry_iv": 15.2,
+      "exit_iv": 15.36,
+      "gross_pnl": 1853.27,
+      "total_costs": 720.09,
+      "net_pnl": 2818.31,
+      "max_profit": 3542.4,
+      "max_loss": 13844.08,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 20800,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-08-17"
+        },
+        {
+          "option_type": "CE",
+          "strike": 20300,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-08-17"
+        },
+        {
+          "option_type": "PE",
+          "strike": 19500,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-08-17"
+        },
+        {
+          "option_type": "PE",
+          "strike": 19000,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-08-17"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T014",
+      "underlying": "NIFTY",
+      "strategy": "CAL",
+      "status": "CLOSED",
+      "market_regime": "NORMAL",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-08-15",
+      "exit_date": "2023-10-10",
+      "days_in_trade": 56,
+      "underlying_at_entry": 20142,
+      "underlying_at_exit": 20074,
+      "entry_premium_per_unit": 97.95,
+      "exit_premium_per_unit": 71.09,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 35.9,
+      "india_vix_at_entry": 16.04,
+      "entry_iv": 17.13,
+      "exit_iv": 14.0,
+      "gross_pnl": 4238.85,
+      "total_costs": 1069.6,
+      "net_pnl": 1342.78,
+      "max_profit": 3918.0,
+      "max_loss": 12377.59,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 20100,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-09-14"
+        },
+        {
+          "option_type": "CE",
+          "strike": 20100,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-10-14"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T015",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "TRENDING",
+      "exit_reason": "TIME_STOP",
+      "entry_date": "2023-09-18",
+      "exit_date": "2023-10-03",
+      "days_in_trade": 15,
+      "underlying_at_entry": 20716,
+      "underlying_at_exit": 20846,
+      "entry_premium_per_unit": 85.09,
+      "exit_premium_per_unit": 144.93,
+      "lots": 2,
+      "lot_size": 50,
+      "iv_rank": 50.4,
+      "india_vix_at_entry": 18.63,
+      "entry_iv": 19.11,
+      "exit_iv": 17.77,
+      "gross_pnl": -3281.75,
+      "total_costs": 783.29,
+      "net_pnl": -5983.81,
+      "max_profit": 6807.2,
+      "max_loss": 26143.42,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 21800,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-11-02"
+        },
+        {
+          "option_type": "CE",
+          "strike": 21300,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-11-02"
+        },
+        {
+          "option_type": "PE",
+          "strike": 20300,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-11-02"
+        },
+        {
+          "option_type": "PE",
+          "strike": 19800,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-11-02"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T016",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "SIDEWAYS",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-09-11",
+      "exit_date": "2023-10-06",
+      "days_in_trade": 25,
+      "underlying_at_entry": 20599,
+      "underlying_at_exit": 20601,
+      "entry_premium_per_unit": 135.73,
+      "exit_premium_per_unit": 118.36,
+      "lots": 2,
+      "lot_size": 50,
+      "iv_rank": 26.9,
+      "india_vix_at_entry": 13.29,
+      "entry_iv": 12.55,
+      "exit_iv": 16.08,
+      "gross_pnl": 3394.04,
+      "total_costs": 1213.15,
+      "net_pnl": 1736.62,
+      "max_profit": 10858.4,
+      "max_loss": 36527.64,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 21600,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-10-26"
+        },
+        {
+          "option_type": "CE",
+          "strike": 21100,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-10-26"
+        },
+        {
+          "option_type": "PE",
+          "strike": 20200,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-10-26"
+        },
+        {
+          "option_type": "PE",
+          "strike": 19700,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-10-26"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T017",
+      "underlying": "NIFTY",
+      "strategy": "CAL",
+      "status": "CLOSED",
+      "market_regime": "HIGH_VOL",
+      "exit_reason": "STOP_LOSS",
+      "entry_date": "2023-10-02",
+      "exit_date": "2023-11-24",
+      "days_in_trade": 53,
+      "underlying_at_entry": 20911,
+      "underlying_at_exit": 21084,
+      "entry_premium_per_unit": 97.31,
+      "exit_premium_per_unit": 124.2,
+      "lots": 2,
+      "lot_size": 50,
+      "iv_rank": 53.7,
+      "india_vix_at_entry": 20.71,
+      "entry_iv": 19.85,
+      "exit_iv": 19.36,
+      "gross_pnl": -1782.32,
+      "total_costs": 708.0,
+      "net_pnl": -2688.99,
+      "max_profit": 7784.8,
+      "max_loss": 22054.57,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 20900,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-11-01"
+        },
+        {
+          "option_type": "CE",
+          "strike": 20900,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-12-01"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T018",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "TRENDING",
+      "exit_reason": "PROFIT_TARGET",
+      "entry_date": "2023-10-18",
+      "exit_date": "2023-11-21",
+      "days_in_trade": 34,
+      "underlying_at_entry": 20989,
+      "underlying_at_exit": 20902,
+      "entry_premium_per_unit": 132.49,
+      "exit_premium_per_unit": 107.36,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 42.1,
+      "india_vix_at_entry": 16.96,
+      "entry_iv": 18.61,
+      "exit_iv": 19.59,
+      "gross_pnl": 3737.2,
+      "total_costs": 1416.24,
+      "net_pnl": 1256.49,
+      "max_profit": 5299.6,
+      "max_loss": 14473.48,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 22100,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-12-02"
+        },
+        {
+          "option_type": "CE",
+          "strike": 21600,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-12-02"
+        },
+        {
+          "option_type": "PE",
+          "strike": 20700,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-12-02"
+        },
+        {
+          "option_type": "PE",
+          "strike": 20200,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2023-12-02"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    },
+    {
+      "trade_code": "T019",
+      "underlying": "NIFTY",
+      "strategy": "CAL",
+      "status": "CLOSED",
+      "market_regime": "SIDEWAYS",
+      "exit_reason": "ADJUSTED",
+      "entry_date": "2023-11-19",
+      "exit_date": "2023-12-18",
+      "days_in_trade": 29,
+      "underlying_at_entry": 21338,
+      "underlying_at_exit": 21457,
+      "entry_premium_per_unit": 147.88,
+      "exit_premium_per_unit": 116.81,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 29.6,
+      "india_vix_at_entry": 15.83,
+      "entry_iv": 16.67,
+      "exit_iv": 16.76,
+      "gross_pnl": 3045.79,
+      "total_costs": 1055.71,
+      "net_pnl": 1553.46,
+      "max_profit": 5915.2,
+      "max_loss": 22644.4,
+      "legs": [
+        {
+          "option_type": "PE",
+          "strike": 21300,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2023-12-19"
+        },
+        {
+          "option_type": "PE",
+          "strike": 21300,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2024-01-18"
+        }
+      ],
+      "adjustments": [
+        {
+          "date": "2023-12-13",
+          "action": "ROLL_UP",
+          "description": "Rolled untested side closer to collect additional premium",
+          "cost": 486.17
+        }
+      ],
+      "notes": ""
+    },
+    {
+      "trade_code": "T020",
+      "underlying": "NIFTY",
+      "strategy": "IC",
+      "status": "CLOSED",
+      "market_regime": "NORMAL",
+      "exit_reason": "TIME_STOP",
+      "entry_date": "2023-12-17",
+      "exit_date": "2024-01-16",
+      "days_in_trade": 30,
+      "underlying_at_entry": 21884,
+      "underlying_at_exit": 21669,
+      "entry_premium_per_unit": 102.67,
+      "exit_premium_per_unit": 67.02,
+      "lots": 1,
+      "lot_size": 50,
+      "iv_rank": 46.5,
+      "india_vix_at_entry": 16.77,
+      "entry_iv": 16.99,
+      "exit_iv": 15.62,
+      "gross_pnl": 4123.68,
+      "total_costs": 1357.86,
+      "net_pnl": 1782.32,
+      "max_profit": 4106.8,
+      "max_loss": 10826.16,
+      "legs": [
+        {
+          "option_type": "CE",
+          "strike": 22800,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2024-01-31"
+        },
+        {
+          "option_type": "CE",
+          "strike": 22300,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2024-01-31"
+        },
+        {
+          "option_type": "PE",
+          "strike": 21300,
+          "side": "SELL",
+          "lots": 1,
+          "expiry": "2024-01-31"
+        },
+        {
+          "option_type": "PE",
+          "strike": 20800,
+          "side": "BUY",
+          "lots": 1,
+          "expiry": "2024-01-31"
+        }
+      ],
+      "adjustments": [],
+      "notes": ""
+    }
+  ]
+}
