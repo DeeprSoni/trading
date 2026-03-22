@@ -1,5 +1,5 @@
 """
-Quant Backtester Dashboard v2.0 — Clean, detailed strategy analytics.
+Quant Backtester Dashboard v2.0
 
 Run with: streamlit run dashboard.py
 """
@@ -16,18 +16,12 @@ import streamlit as st
 from config.settings import (
     TOTAL_CAPITAL, CAPITAL_STRUCTURE, PARKED_YIELD,
     PARKED_CAPITAL_ANNUAL_INCOME, PHASE_1_ACTIVE_CAPITAL,
-    IC_IVR_MIN, IC_VIX_STANDARD_MAX, IC_VIX_ELEVATED_MAX, IC_VIX_KILLSWITCH,
-    IC_EVENT_BLACKOUT_DAYS,
 )
 
 st.set_page_config(page_title="Quant Dashboard", layout="wide", initial_sidebar_state="expanded")
-
-# ── Styling ──────────────────────────────────────────────────────────────────
 st.markdown("""<style>
     .block-container { padding-top: 1.5rem; }
-    [data-testid="stMetricValue"] { font-size: 1.3rem; }
-    [data-testid="stMetricDelta"] { font-size: 0.85rem; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    [data-testid="stMetricValue"] { font-size: 1.25rem; }
 </style>""", unsafe_allow_html=True)
 
 RESULTS_DIR = Path("data/sweep_results")
@@ -45,27 +39,6 @@ def load_sweep(filename: str) -> dict | None:
         return json.load(f)
 
 
-@st.cache_data
-def get_results_df(data: dict) -> pd.DataFrame:
-    """Flatten results into a DataFrame for easy filtering/sorting."""
-    if not data:
-        return pd.DataFrame()
-    rows = []
-    for r in data.get("results", []):
-        row = {k: v for k, v in r.items() if k not in ("trades", "params", "ic_params", "cal_params")}
-        # Flatten params
-        for k, v in r.get("params", {}).items():
-            row[f"p_{k}"] = v
-        for k, v in r.get("ic_params", {}).items():
-            row[f"ic_{k}"] = v
-        for k, v in r.get("cal_params", {}).items():
-            row[f"cal_{k}"] = v
-        row["trade_count"] = len(r.get("trades", []))
-        row["roi_pct"] = r.get("total_net_pnl", 0) / CAPITAL * 100
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
 ic_data = load_sweep("ic_sweep.json")
 cal_data = load_sweep("cal_sweep.json")
 combined_data = load_sweep("combined_sweep.json")
@@ -78,166 +51,276 @@ if not ic_data and not cal_data:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def fmt_rs(v): return f"Rs {v:,.0f}"
-def fmt_pct(v): return f"{v:.1f}%"
-def fmt_pct2(v): return f"{v:.2f}%"
 def pnl_color(v): return "#22c55e" if v >= 0 else "#ef4444"
 
-def best_by_sharpe(data, slippage="optimistic"):
+
+def best_config(data, slippage, key="sharpe_ratio"):
     results = data.get("results", [])
     filtered = [r for r in results if r.get("slippage_model") == slippage]
     if not filtered:
         return None
-    return max(filtered, key=lambda r: r.get("sharpe_ratio", -999))
+    return max(filtered, key=lambda r: r.get(key, -999))
 
 
 def make_equity_curve(trades):
-    """Build cumulative P&L from trade list."""
     if not trades:
         return go.Figure()
     cum = list(np.cumsum([t.get("net_pnl", 0) for t in trades]))
     dates = [t.get("exit_date", "")[:10] for t in trades]
     color = pnl_color(cum[-1])
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
+    fig = go.Figure(go.Scatter(
         x=dates, y=cum, mode="lines+markers", line=dict(color=color, width=2),
         fill="tozeroy", fillcolor=color.replace(")", ",0.08)").replace("rgb", "rgba"),
-        hovertemplate="Date: %{x}<br>Cum P&L: Rs %{y:,.0f}<extra></extra>",
+        hovertemplate="Date: %{x}<br>P&L: Rs %{y:,.0f}<extra></extra>",
     ))
-    fig.update_layout(
-        height=340, margin=dict(t=10, b=30, l=50, r=10),
-        xaxis_title="", yaxis_title="Cumulative P&L (Rs)",
-        yaxis=dict(tickformat=","),
-    )
+    fig.update_layout(height=320, margin=dict(t=10, b=30, l=50, r=10),
+                      yaxis_title="Cumulative P&L (Rs)", yaxis=dict(tickformat=","))
     return fig
 
 
 def make_drawdown_chart(trades):
-    """Build drawdown chart from trade P&Ls."""
     if not trades:
         return go.Figure()
-    pnls = [t.get("net_pnl", 0) for t in trades]
-    cum = np.cumsum(pnls)
+    cum = np.cumsum([t.get("net_pnl", 0) for t in trades])
     peak = np.maximum.accumulate(cum)
     dd = cum - peak
     dates = [t.get("exit_date", "")[:10] for t in trades]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
+    fig = go.Figure(go.Scatter(
         x=dates, y=dd, fill="tozeroy", line=dict(color="#ef4444", width=1),
-        fillcolor="rgba(239,68,68,0.15)",
-        hovertemplate="Date: %{x}<br>Drawdown: Rs %{y:,.0f}<extra></extra>",
+        fillcolor="rgba(239,68,68,0.12)",
+        hovertemplate="Date: %{x}<br>DD: Rs %{y:,.0f}<extra></extra>",
     ))
-    fig.update_layout(
-        height=260, margin=dict(t=10, b=30, l=50, r=10),
-        xaxis_title="", yaxis_title="Drawdown (Rs)",
-        yaxis=dict(tickformat=","),
-    )
+    fig.update_layout(height=250, margin=dict(t=10, b=30, l=50, r=10),
+                      yaxis_title="Drawdown (Rs)", yaxis=dict(tickformat=","))
     return fig
 
 
-# ── Sidebar Navigation ──────────────────────────────────────────────────────
+def render_metrics_row(r, label_prefix=""):
+    """Render 3 rows of 6 metrics for a backtest result."""
+    pnl = r.get("total_net_pnl", 0)
+    combined = pnl + PARKED_CAPITAL_ANNUAL_INCOME
+
+    st.markdown("**Returns**")
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Trading P&L", fmt_rs(pnl))
+    c2.metric("+ Parked Income", fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME))
+    c3.metric("Combined Income", fmt_rs(combined))
+    c4.metric("ROI (Total)", f"{combined / CAPITAL * 100:.1f}%")
+    c5.metric("ROI (Trading)", f"{pnl / CAPITAL * 100:.1f}%")
+    c6.metric("Annual Return", f"{r.get('annual_return_pct', 0):.1f}%")
+
+    st.markdown("**Risk**")
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Sharpe", f"{r.get('sharpe_ratio', 0):.3f}")
+    k2.metric("Sortino", f"{r.get('sortino_ratio', 0):.3f}")
+    k3.metric("Calmar", f"{r.get('calmar_ratio', 0):.3f}")
+    k4.metric("Max Drawdown", f"{r.get('max_drawdown_pct', 0):.2%}")
+    k5.metric("Max DD (Rs)", fmt_rs(r.get("max_drawdown", 0)))
+    k6.metric("Profit Factor", f"{r.get('profit_factor', 0):.2f}")
+
+    st.markdown("**Trades**")
+    t1, t2, t3, t4, t5, t6 = st.columns(6)
+    t1.metric("Total", r.get("total_trades", 0))
+    t2.metric("Win Rate", f"{r.get('win_rate', 0):.1%}")
+    t3.metric("Winners / Losers", f"{r.get('winning_trades', 0)} / {r.get('losing_trades', 0)}")
+    t4.metric("Avg Winner", fmt_rs(r.get("avg_winner", 0)))
+    t5.metric("Avg Loser", fmt_rs(r.get("avg_loser", 0)))
+    t6.metric("Avg Hold", f"{r.get('avg_holding_days', 0):.0f} days")
+
+
+def render_adjustment_analysis(trades):
+    """Render adjustment breakdown with case-by-case table."""
+    adj_trades = [t for t in trades if t.get("adjustment_count", 0) > 0]
+    non_adj = [t for t in trades if t.get("adjustment_count", 0) == 0]
+
+    if not adj_trades:
+        st.info("No adjustments triggered in this configuration.")
+        return
+
+    total_adj = sum(t.get("adjustment_count", 0) for t in trades)
+    total_adj_cost = sum(t.get("adjustment_costs", 0) for t in trades)
+    total_adj_pnl = sum(t.get("adjustment_pnl", 0) for t in trades)
+    adj_wr = sum(1 for t in adj_trades if t.get("net_pnl", 0) > 0) / len(adj_trades) * 100
+    non_adj_wr = (sum(1 for t in non_adj if t.get("net_pnl", 0) > 0) / len(non_adj) * 100) if non_adj else 0
+
+    a1, a2, a3, a4, a5 = st.columns(5)
+    a1.metric("Adjusted / Total", f"{len(adj_trades)} / {len(trades)}")
+    a2.metric("Total Adjustments", total_adj)
+    a3.metric("Adj Costs", fmt_rs(total_adj_cost))
+    a4.metric("Adj P&L Impact", fmt_rs(total_adj_pnl))
+    a5.metric("WR: Adj vs Non-Adj", f"{adj_wr:.0f}% vs {non_adj_wr:.0f}%")
+
+    # Case-by-case table
+    st.markdown("**Adjusted Trades — Case by Case**")
+    rows = []
+    for t in adj_trades:
+        meta = t.get("metadata", {})
+        rows.append({
+            "ID": t.get("position_id", "")[-8:],
+            "Entry": t.get("entry_date", "")[:10],
+            "Exit": t.get("exit_date", "")[:10],
+            "Days": t.get("holding_days", 0),
+            "Exit Type": t.get("exit_type", ""),
+            "Adj #": t.get("adjustment_count", 0),
+            "Adj Cost": fmt_rs(t.get("adjustment_costs", 0)),
+            "Adj P&L": fmt_rs(t.get("adjustment_pnl", 0)),
+            "Gross": fmt_rs(t.get("gross_pnl", 0)),
+            "Net P&L": fmt_rs(t.get("net_pnl", 0)),
+            "VIX": f"{meta.get('vix_at_entry', 0):.1f}",
+            "IVR": f"{meta.get('iv_rank_at_entry', 0):.0f}",
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def render_trades_table(trades, strategy_type="IC"):
+    """Render full trade table."""
+    rows = []
+    for i, t in enumerate(trades):
+        meta = t.get("metadata", {})
+        row = {
+            "#": i + 1,
+            "Entry": t.get("entry_date", "")[:10],
+            "Exit": t.get("exit_date", "")[:10],
+            "Days": t.get("holding_days", 0),
+            "Exit Type": t.get("exit_type", ""),
+            "Gross": fmt_rs(t.get("gross_pnl", 0)),
+            "Costs": fmt_rs(t.get("total_costs", 0)),
+            "Net P&L": fmt_rs(t.get("net_pnl", 0)),
+            "Adj": t.get("adjustment_count", 0),
+        }
+        if strategy_type == "IC":
+            row["DTE"] = meta.get("dte_at_entry", "")
+            row["VIX"] = f"{meta.get('vix_at_entry', 0):.1f}"
+            row["IVR"] = f"{meta.get('iv_rank_at_entry', 0):.0f}"
+            row["SC"] = meta.get("short_call_strike", "")
+            row["SP"] = meta.get("short_put_strike", "")
+        elif strategy_type == "CAL":
+            row["Strike"] = meta.get("strike", "")
+            row["F-DTE"] = meta.get("front_dte", "")
+            row["B-DTE"] = meta.get("back_dte", "")
+            row["VIX"] = f"{meta.get('vix_at_entry', 0):.1f}"
+        rows.append(row)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def render_stats_section(data, label):
+    """Render statistical validation (bootstrap, MC, walk-forward, regime)."""
+    stats = data.get("top_stats", [])
+    if not stats:
+        st.info(f"No statistical analysis for {label}.")
+        return
+
+    for stat in stats:
+        verdict = stat.get("verdict", "N/A")
+        cmap = {"STRONG": "green", "MARGINAL": "orange", "WEAK": "red", "INSUFFICIENT_DATA": "gray"}
+        color = cmap.get(verdict, "gray")
+
+        with st.expander(f"{stat.get('strategy_name', '')} — :{color}[{verdict}]"):
+            sci = stat.get("sharpe_ci")
+            if sci:
+                st.markdown(f"**Sharpe 95% CI:** [{sci['lower']:.2f}, {sci['upper']:.2f}] "
+                            f"(point: {sci.get('point', 0):.2f})")
+
+            mc = stat.get("monte_carlo")
+            if mc:
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("P(Profit)", f"{mc['prob_profit']:.0%}")
+                m2.metric("P(Ruin)", f"{mc['prob_ruin']:.0%}")
+                m3.metric("Median P&L", fmt_rs(mc['median_pnl']))
+                m4.metric("5th %ile", fmt_rs(mc.get('pct_5', 0)))
+                m5.metric("95th %ile", fmt_rs(mc.get('pct_95', 0)))
+
+            wf = stat.get("walk_forward")
+            if wf:
+                st.markdown(f"**Walk-Forward:** Consistent = {'Yes' if wf['is_consistent'] else 'No'} | "
+                            f"OOS Sharpe: {wf['oos_sharpe_mean']:.2f} | "
+                            f"Degradation: {wf['degradation_pct']:.0f}%")
+
+            regimes = stat.get("regime_analysis", [])
+            if regimes:
+                st.markdown("**Regime Breakdown:**")
+                st.dataframe(pd.DataFrame([{
+                    "Regime": rg["regime"].upper(),
+                    "Trades": rg["n_trades"],
+                    "Win Rate": f"{rg['win_rate']:.0%}",
+                    "Avg P&L": fmt_rs(rg["avg_pnl"]),
+                } for rg in regimes]), use_container_width=True, hide_index=True)
+
+
+# ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.title("Quant Dashboard")
-    st.caption("Nifty 50 Options Backtester v2.0")
+    st.caption("Nifty 50 Options | v2.0")
     st.markdown("---")
 
-    page = st.radio(
-        "Navigate",
-        ["Executive Summary", "Iron Condor", "Calendar Spread",
-         "Combined IC+CAL", "Risk & Statistics", "Trade Explorer"],
-        label_visibility="collapsed",
-    )
-
-    st.markdown("---")
-    st.markdown("**Capital**")
-    st.metric("Total", fmt_rs(TOTAL_CAPITAL))
-    st.metric("Active (Phase 1)", fmt_rs(PHASE_1_ACTIVE_CAPITAL))
-    st.metric("Parked Yield/yr", fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME))
+    page = st.radio("", [
+        "Overview",
+        "Iron Condor",
+        "Calendar Spread",
+        "Combined IC+CAL",
+        "Risk & Statistics",
+        "Trade Explorer",
+    ], label_visibility="collapsed")
 
     st.markdown("---")
     slippage = st.selectbox("Slippage Model", ["optimistic", "realistic", "conservative"])
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE: Executive Summary
-# ════════════════════════════════════════════════════════════════════════════
-
-if page == "Executive Summary":
-    st.header("Executive Summary")
-
-    # Best configs
-    ic_best = best_by_sharpe(ic_data, slippage) if ic_data else None
-    cal_best = best_by_sharpe(cal_data, slippage) if cal_data else None
-    comb_best = best_by_sharpe(combined_data, slippage) if combined_data else None
-
-    # ── Capital Structure ──
-    st.subheader("Capital Allocation")
-    cols = st.columns(6)
-    for i, (key, amount) in enumerate(CAPITAL_STRUCTURE.items()):
-        yld = PARKED_YIELD.get(key)
-        label = key.replace("_", " ").title()
-        delta = f"{yld:.1%} yield" if yld else "Deployed"
-        cols[i].metric(label, fmt_rs(amount), delta=delta)
-
     st.markdown("---")
+    st.caption("**Capital**")
+    st.caption(f"Total: {fmt_rs(TOTAL_CAPITAL)}")
+    st.caption(f"Active: {fmt_rs(PHASE_1_ACTIVE_CAPITAL)}")
+    st.caption(f"Parked yield: {fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME)}/yr")
 
-    # ── Strategy Performance Comparison ──
-    st.subheader("Strategy Performance at a Glance")
 
-    def strat_row(name, r):
-        if not r:
-            return None
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE: Overview
+# ════════════════════════════════════════════════════════════════════════════
+
+if page == "Overview":
+    st.header("Overview")
+
+    # ── Status Banner ──
+    st.info(
+        "**Current data:** Baseline sweep (seed=42, 400 days, Jun 2022 — Dec 2023, synthetic chains). "
+        "v2 code (relaxed gates, 8-type adjustment engines, real data pipeline) is implemented — "
+        "re-sweep with new settings pending."
+    )
+
+    # ── Strategy Comparison ──
+    ic_best = best_config(ic_data, slippage) if ic_data else None
+    cal_best = best_config(cal_data, slippage) if cal_data else None
+    comb_best = best_config(combined_data, slippage) if combined_data else None
+
+    st.subheader("Best Configs Compared")
+
+    def row(name, r):
+        if not r: return None
         pnl = r.get("total_net_pnl", 0)
-        combined_income = pnl + PARKED_CAPITAL_ANNUAL_INCOME
         return {
             "Strategy": name,
-            "Net P&L": pnl,
-            "Combined Income": combined_income,
-            "ROI (Total)": f"{combined_income / CAPITAL * 100:.1f}%",
-            "ROI (Trading)": f"{pnl / CAPITAL * 100:.1f}%",
-            "Sharpe": r.get("sharpe_ratio", 0),
-            "Sortino": r.get("sortino_ratio", 0),
+            "Config": r.get("strategy_name", ""),
+            "Net P&L": fmt_rs(pnl),
+            "Combined": fmt_rs(pnl + PARKED_CAPITAL_ANNUAL_INCOME),
+            "ROI": f"{(pnl + PARKED_CAPITAL_ANNUAL_INCOME) / CAPITAL * 100:.1f}%",
+            "Sharpe": f"{r.get('sharpe_ratio', 0):.2f}",
             "Win Rate": f"{r.get('win_rate', 0):.0%}",
             "Max DD": f"{r.get('max_drawdown_pct', 0):.1%}",
             "Trades": r.get("total_trades", 0),
-            "Avg Hold": f"{r.get('avg_holding_days', 0):.0f}d",
-            "Profit Factor": r.get("profit_factor", 0),
+            "PF": f"{r.get('profit_factor', 0):.2f}",
         }
 
-    rows = [r for r in [
-        strat_row("Iron Condor (Best)", ic_best),
-        strat_row("Calendar Spread (Best)", cal_best),
-        strat_row("Combined IC+CAL (Best)", comb_best),
-    ] if r]
-
+    rows = [r for r in [row("IC", ic_best), row("CAL", cal_best), row("Combined", comb_best)] if r]
     if rows:
-        df = pd.DataFrame(rows)
-        df["Net P&L"] = df["Net P&L"].apply(fmt_rs)
-        df["Combined Income"] = df["Combined Income"].apply(fmt_rs)
-        df["Sharpe"] = df["Sharpe"].apply(lambda x: f"{x:.2f}")
-        df["Sortino"] = df["Sortino"].apply(lambda x: f"{x:.2f}")
-        df["Profit Factor"] = df["Profit Factor"].apply(lambda x: f"{x:.2f}")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    st.markdown("---")
+    st.caption(f"Slippage: {slippage} | Combined = Trading P&L + Parked {fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME)}/yr")
 
-    # ── Headline Metrics ──
+    # ── Best Combined ──
     if comb_best:
+        st.markdown("---")
         st.subheader("Best Combined Strategy")
-        pnl = comb_best.get("total_net_pnl", 0)
-        combined = pnl + PARKED_CAPITAL_ANNUAL_INCOME
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Combined Annual Income", fmt_rs(combined),
-                   delta=f"Trading {fmt_rs(pnl)} + Parked {fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME)}")
-        c2.metric("Total ROI", fmt_pct(combined / CAPITAL * 100))
-        c3.metric("Sharpe Ratio", f"{comb_best.get('sharpe_ratio', 0):.2f}")
-        c4.metric("Max Drawdown", f"{comb_best.get('max_drawdown_pct', 0):.1%}")
-        c5.metric("Win Rate", f"{comb_best.get('win_rate', 0):.0%}")
-
-        split = f"IC {comb_best.get('ic_allocation_pct', 50)}% / CAL {comb_best.get('cal_allocation_pct', 50)}%"
-        st.caption(f"Config: `{comb_best.get('strategy_name', '')}` | Split: {split} | "
-                   f"Slippage: {slippage}")
+        render_metrics_row(comb_best)
 
         col1, col2 = st.columns(2)
         with col1:
@@ -247,31 +330,58 @@ if page == "Executive Summary":
             st.markdown("**Drawdown**")
             st.plotly_chart(make_drawdown_chart(comb_best.get("trades", [])), use_container_width=True)
 
+    # ── Phase 6 Projected Metrics ──
     st.markdown("---")
+    st.subheader("Projected Metrics (targets after re-sweep)")
+    st.caption("Conservative estimates based on v2 code changes. Real data re-sweep will validate.")
 
-    # ── v2 Gate Changes ──
-    with st.expander("v2 Engine Changes"):
-        g1, g2 = st.columns(2)
-        with g1:
-            st.markdown("**IC Entry Gate Changes**")
-            st.dataframe(pd.DataFrame([
-                {"Gate": "IV Rank Min", "Before": "30", "After": str(IC_IVR_MIN), "Impact": "+40% opportunities"},
-                {"Gate": "VIX", "Before": "25 cutoff", "After": f"{IC_VIX_STANDARD_MAX}/{IC_VIX_ELEVATED_MAX}/{IC_VIX_KILLSWITCH}", "Impact": "Dynamic sizing"},
-                {"Gate": "Event Blackout", "Before": "25 days", "After": f"{IC_EVENT_BLACKOUT_DAYS} days", "Impact": "-60% blocked days"},
-                {"Gate": "Wing Width", "Before": "500 fixed", "After": "400-900 by VIX", "Impact": "Adaptive protection"},
-            ]), use_container_width=True, hide_index=True)
-        with g2:
-            st.markdown("**v2 Adjustment Types**")
-            st.dataframe(pd.DataFrame([
-                {"IC Adjustments": "Emergency Stop", "CAL Adjustments": "Close Large Move"},
-                {"IC Adjustments": "Profit Target", "CAL Adjustments": "Close Back Near"},
-                {"IC Adjustments": "Time Stop", "CAL Adjustments": "Early Profit Close"},
-                {"IC Adjustments": "Wing Removal", "CAL Adjustments": "IV Harvest Roll"},
-                {"IC Adjustments": "Partial Close Winner", "CAL Adjustments": "Front Month Roll"},
-                {"IC Adjustments": "Roll Untested Inward", "CAL Adjustments": "Full Recentre"},
-                {"IC Adjustments": "Defensive Roll", "CAL Adjustments": "Diagonal Conversion"},
-                {"IC Adjustments": "Iron Fly Conversion", "CAL Adjustments": "Add Second Calendar"},
-            ]), use_container_width=True, hide_index=True)
+    proj = pd.DataFrame([
+        {"Phase": "Baseline (current)", "ROI Total": "5.9%", "ROI Active": "11.5%", "Sharpe": "1.97", "Max DD": "1.8%", "Win Rate": "71%", "Trades/yr": 34, "Monthly Rs": "3,688"},
+        {"Phase": "Phase 1 — gates relaxed", "ROI Total": "8.5%", "ROI Active": "13.0%", "Sharpe": "1.85", "Max DD": "3.2%", "Win Rate": "72%", "Trades/yr": 55, "Monthly Rs": "5,313"},
+        {"Phase": "Phase 2 — v2 adjustments", "ROI Total": "11.5%", "ROI Active": "16.0%", "Sharpe": "2.10", "Max DD": "4.5%", "Win Rate": "78%", "Trades/yr": 60, "Monthly Rs": "7,188"},
+        {"Phase": "Phase 3 — BankNifty", "ROI Total": "15.5%", "ROI Active": "19.5%", "Sharpe": "2.05", "Max DD": "7.0%", "Win Rate": "75%", "Trades/yr": 90, "Monthly Rs": "9,688"},
+        {"Phase": "Phase 4 — compounding", "ROI Total": "18.0%", "ROI Active": "21.0%", "Sharpe": "2.00", "Max DD": "7.5%", "Win Rate": "75%", "Trades/yr": 100, "Monthly Rs": "11,250"},
+    ])
+    st.dataframe(proj, use_container_width=True, hide_index=True)
+    st.caption("ROI Total = (trading P&L + parked yield) / Rs 7.5L. ROI Active = trading P&L / deployed capital only.")
+
+    # ── Capital ──
+    st.markdown("---")
+    with st.expander("Capital Structure"):
+        rows = []
+        for key, amount in CAPITAL_STRUCTURE.items():
+            yld = PARKED_YIELD.get(key)
+            rows.append({
+                "Bucket": key.replace("_", " ").title(),
+                "Amount": fmt_rs(amount),
+                "Yield": f"{yld:.1%}" if yld else "Deployed",
+                "Annual": fmt_rs(amount * yld) if yld else "-",
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption(f"Total parked income: {fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME)}/yr ({PARKED_CAPITAL_ANNUAL_INCOME/CAPITAL*100:.1f}% of capital)")
+
+    # ── What the sweep actually used ──
+    with st.expander("Sweep Parameters (what produced these results)"):
+        st.markdown("""
+**Data:** Synthetic option chains from Nifty 50 spot prices (Jun 2022 — Dec 2023, 400 days, seed=42)
+
+**IC Sweep** (243 combos x 3 slippage = 729):
+- Short delta: 0.16, 0.20, 0.25
+- Wing width: 400, 500, 600 pts (fixed per config)
+- Profit target: 40%, 50%, 65%
+- Stop loss: 1.5x, 2.0x, 2.5x
+- Time stop: 18, 21, 25 DTE
+- IV Rank min: 30 (fixed), VIX max: 25 (fixed)
+
+**CAL Sweep** (243 combos x 3 slippage = 729):
+- Adjust threshold: 1.5%, 2.0%, 2.5%
+- Close threshold: 3%, 4%, 5%
+- Profit target: 40%, 50%, 60%
+- Back close DTE: 22, 25, 28
+- Max VIX: 25, 28, 32
+
+**Combined** (375 blends): Top 5 IC x Top 5 CAL x 5 allocation splits x 3 slippage
+        """)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -279,79 +389,42 @@ if page == "Executive Summary":
 # ════════════════════════════════════════════════════════════════════════════
 
 elif page == "Iron Condor":
-    st.header("Iron Condor — Deep Dive")
+    st.header("Iron Condor")
 
     if not ic_data:
-        st.error("No IC data available.")
+        st.error("No IC data.")
         st.stop()
 
     results = ic_data.get("results", [])
     filtered = [r for r in results if r.get("slippage_model") == slippage]
     filtered.sort(key=lambda r: r.get("sharpe_ratio", 0), reverse=True)
 
-    st.caption(f"{len(filtered)} configurations | {slippage} slippage")
+    st.caption(f"{len(filtered)} configs | {slippage} slippage | "
+               f"Sweep params: IVR>=30, VIX<=25, wings 400-600")
 
     best = filtered[0] if filtered else None
     if not best:
         st.stop()
 
-    # ── Best Config Summary ──
-    tab_best, tab_all, tab_params = st.tabs(["Best Configuration", "All Configurations", "Parameter Sensitivity"])
+    tab1, tab2, tab3 = st.tabs(["Best Config", "All Configs", "Parameters"])
 
-    with tab_best:
-        pnl = best.get("total_net_pnl", 0)
-        combined = pnl + PARKED_CAPITAL_ANNUAL_INCOME
-
+    with tab1:
         st.subheader(f"`{best.get('strategy_name', '')}`")
 
-        # ROI & Return metrics
-        r1, r2, r3, r4, r5, r6 = st.columns(6)
-        r1.metric("Trading P&L", fmt_rs(pnl))
-        r2.metric("Combined Income", fmt_rs(combined), delta=f"+{fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME)} parked")
-        r3.metric("ROI (Total Capital)", fmt_pct(combined / CAPITAL * 100))
-        r4.metric("Annual Return", fmt_pct(best.get("annual_return_pct", 0)))
-        r5.metric("Gross P&L", fmt_rs(best.get("total_gross_pnl", 0)))
-        r6.metric("Total Costs", fmt_rs(best.get("total_costs", 0)))
-
-        st.markdown("")
-
-        # Risk metrics
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
-        k1.metric("Sharpe", f"{best.get('sharpe_ratio', 0):.3f}")
-        k2.metric("Sortino", f"{best.get('sortino_ratio', 0):.3f}")
-        k3.metric("Calmar", f"{best.get('calmar_ratio', 0):.3f}")
-        k4.metric("Max Drawdown", f"{best.get('max_drawdown_pct', 0):.2%}")
-        k5.metric("Win Rate", f"{best.get('win_rate', 0):.1%}")
-        k6.metric("Profit Factor", f"{best.get('profit_factor', 0):.2f}")
-
-        st.markdown("")
-
-        # Trade stats
-        t1, t2, t3, t4, t5, t6 = st.columns(6)
-        t1.metric("Total Trades", best.get("total_trades", 0))
-        t2.metric("Winners", best.get("winning_trades", 0))
-        t3.metric("Losers", best.get("losing_trades", 0))
-        t4.metric("Avg Winner", fmt_rs(best.get("avg_winner", 0)))
-        t5.metric("Avg Loser", fmt_rs(best.get("avg_loser", 0)))
-        t6.metric("Avg Holding", f"{best.get('avg_holding_days', 0):.0f} days")
-
-        # Parameters
+        # Show actual params from the sweep
         params = best.get("params", {})
-        with st.expander("Strategy Parameters"):
-            p_cols = st.columns(6)
-            param_display = [
-                ("Short Delta", params.get("short_delta", 0), True),
-                ("Wing Width", f"{params.get('wing_width', 0)} pts", False),
-                ("Profit Target", params.get("profit_target_pct", 0), True),
-                ("Stop Loss", f"{params.get('stop_loss_multiplier', 0)}x", False),
-                ("Time Stop", f"{params.get('time_stop_dte', 0)} DTE", False),
-                ("Min IV Rank", params.get("min_iv_rank", 0), False),
-            ]
-            for i, (label, val, is_pct) in enumerate(param_display):
-                if is_pct and isinstance(val, float) and val < 1:
-                    p_cols[i].metric(label, f"{val:.0%}")
+        with st.expander("Configuration Parameters (from sweep)"):
+            pcols = st.columns(6)
+            for i, (k, v) in enumerate([(k, v) for k, v in params.items()
+                                         if k in ("short_delta", "wing_width", "profit_target_pct",
+                                                   "stop_loss_multiplier", "time_stop_dte", "min_iv_rank")]):
+                label = k.replace("_", " ").title()
+                if isinstance(v, float) and v < 1:
+                    pcols[i].metric(label, f"{v:.0%}")
                 else:
-                    p_cols[i].metric(label, val)
+                    pcols[i].metric(label, v)
+
+        render_metrics_row(best)
 
         # Charts
         trades = best.get("trades", [])
@@ -363,156 +436,83 @@ elif page == "Iron Condor":
             st.markdown("**Drawdown**")
             st.plotly_chart(make_drawdown_chart(trades), use_container_width=True)
 
-        # Trade P&L bar chart
+        # Trade P&L bars
         if trades:
-            trade_pnls = [t.get("net_pnl", 0) for t in trades]
-            colors = [pnl_color(p) for p in trade_pnls]
+            pnls = [t.get("net_pnl", 0) for t in trades]
             fig = go.Figure(go.Bar(
-                x=list(range(1, len(trades) + 1)), y=trade_pnls,
-                marker_color=colors,
-                hovertemplate="Trade %{x}<br>P&L: Rs %{y:,.0f}<br>Exit: %{customdata}<extra></extra>",
+                x=list(range(1, len(trades) + 1)), y=pnls,
+                marker_color=[pnl_color(p) for p in pnls],
+                hovertemplate="Trade %{x}: Rs %{y:,.0f}<br>%{customdata}<extra></extra>",
                 customdata=[t.get("exit_type", "") for t in trades],
             ))
-            fig.update_layout(height=250, margin=dict(t=10, b=30, l=50, r=10),
-                              xaxis_title="Trade #", yaxis_title="Net P&L (Rs)", yaxis=dict(tickformat=","))
+            fig.update_layout(height=240, margin=dict(t=10, b=30, l=50, r=10),
+                              xaxis_title="Trade #", yaxis_title="P&L (Rs)", yaxis=dict(tickformat=","))
             st.markdown("**Trade-by-Trade P&L**")
             st.plotly_chart(fig, use_container_width=True)
 
-        # Adjustment analysis
-        adj_trades = [t for t in trades if t.get("adjustment_count", 0) > 0]
+        # Adjustments
         st.markdown("---")
         st.subheader("Adjustment Analysis")
+        render_adjustment_analysis(trades)
 
-        if adj_trades:
-            total_adj = sum(t.get("adjustment_count", 0) for t in trades)
-            total_adj_cost = sum(t.get("adjustment_costs", 0) for t in trades)
-            total_adj_pnl = sum(t.get("adjustment_pnl", 0) for t in trades)
-            adj_winners = sum(1 for t in adj_trades if t.get("net_pnl", 0) > 0)
-            non_adj = [t for t in trades if t.get("adjustment_count", 0) == 0]
-            non_adj_winners = sum(1 for t in non_adj if t.get("net_pnl", 0) > 0)
-
-            a1, a2, a3, a4, a5 = st.columns(5)
-            a1.metric("Trades Adjusted", f"{len(adj_trades)} / {len(trades)}",
-                       delta=f"{len(adj_trades)/len(trades)*100:.0f}%")
-            a2.metric("Total Adjustments", total_adj)
-            a3.metric("Adjustment Costs", fmt_rs(total_adj_cost))
-            a4.metric("Adjustment P&L Impact", fmt_rs(total_adj_pnl))
-            a5.metric("Adjusted WR vs Non-Adj WR",
-                       f"{adj_winners/max(len(adj_trades),1)*100:.0f}% vs {non_adj_winners/max(len(non_adj),1)*100:.0f}%")
-
-            # Case-by-case adjustment table
-            adj_rows = []
-            for t in adj_trades:
-                meta = t.get("metadata", {})
-                adj_rows.append({
-                    "Trade": t.get("position_id", "")[-6:],
-                    "Entry": t.get("entry_date", "")[:10],
-                    "Exit": t.get("exit_date", "")[:10],
-                    "Days": t.get("holding_days", 0),
-                    "Exit Type": t.get("exit_type", ""),
-                    "Adjustments": t.get("adjustment_count", 0),
-                    "Adj Cost": fmt_rs(t.get("adjustment_costs", 0)),
-                    "Adj P&L": fmt_rs(t.get("adjustment_pnl", 0)),
-                    "Gross P&L": fmt_rs(t.get("gross_pnl", 0)),
-                    "Net P&L": fmt_rs(t.get("net_pnl", 0)),
-                    "Entry VIX": f"{meta.get('vix_at_entry', 0):.1f}",
-                    "Entry IVR": f"{meta.get('iv_rank_at_entry', 0):.0f}",
-                    "Short Call": meta.get("short_call_strike", ""),
-                    "Short Put": meta.get("short_put_strike", ""),
-                })
-            st.dataframe(pd.DataFrame(adj_rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("No adjustments triggered in this configuration.")
-
-        # Full trade table
+        # All trades
         st.markdown("---")
         st.subheader("All Trades")
-        if trades:
-            trade_rows = []
-            for i, t in enumerate(trades):
-                meta = t.get("metadata", {})
-                trade_rows.append({
-                    "#": i + 1,
-                    "Entry": t.get("entry_date", "")[:10],
-                    "Exit": t.get("exit_date", "")[:10],
-                    "Days": t.get("holding_days", 0),
-                    "Exit Type": t.get("exit_type", ""),
-                    "Gross": fmt_rs(t.get("gross_pnl", 0)),
-                    "Costs": fmt_rs(t.get("total_costs", 0)),
-                    "Net P&L": fmt_rs(t.get("net_pnl", 0)),
-                    "Adj": t.get("adjustment_count", 0),
-                    "DTE": meta.get("dte_at_entry", ""),
-                    "VIX": f"{meta.get('vix_at_entry', 0):.1f}",
-                    "IVR": f"{meta.get('iv_rank_at_entry', 0):.0f}",
-                    "Call": meta.get("short_call_strike", ""),
-                    "Put": meta.get("short_put_strike", ""),
-                })
-            st.dataframe(pd.DataFrame(trade_rows), use_container_width=True, hide_index=True)
+        render_trades_table(trades, "IC")
 
-    with tab_all:
-        st.subheader("All Configurations Ranked")
+    with tab2:
+        st.subheader("Top 50 Configurations")
         rows = []
         for i, r in enumerate(filtered[:50]):
             pnl = r.get("total_net_pnl", 0)
             rows.append({
-                "#": i + 1,
-                "Config": r.get("strategy_name", ""),
-                "Net P&L": fmt_rs(pnl),
-                "ROI": fmt_pct(pnl / CAPITAL * 100),
-                "Sharpe": f"{r.get('sharpe_ratio', 0):.2f}",
+                "#": i + 1, "Config": r.get("strategy_name", ""),
+                "P&L": fmt_rs(pnl), "Sharpe": f"{r.get('sharpe_ratio', 0):.2f}",
                 "Sortino": f"{r.get('sortino_ratio', 0):.2f}",
-                "Win Rate": f"{r.get('win_rate', 0):.0%}",
-                "Max DD": f"{r.get('max_drawdown_pct', 0):.1%}",
-                "Trades": r.get("total_trades", 0),
-                "PF": f"{r.get('profit_factor', 0):.2f}",
+                "WR": f"{r.get('win_rate', 0):.0%}", "DD": f"{r.get('max_drawdown_pct', 0):.1%}",
+                "Trades": r.get("total_trades", 0), "PF": f"{r.get('profit_factor', 0):.2f}",
                 "Avg P&L": fmt_rs(r.get("avg_trade_pnl", 0)),
             })
-        if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=600)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=500)
 
-        # Distribution charts
-        col1, col2 = st.columns(2)
-        with col1:
-            sharpes = [r.get("sharpe_ratio", 0) for r in filtered]
-            fig = px.histogram(x=sharpes, nbins=30, title="Sharpe Distribution",
-                               labels={"x": "Sharpe Ratio", "y": "Count"})
+        c1, c2 = st.columns(2)
+        with c1:
+            fig = px.histogram(x=[r.get("sharpe_ratio", 0) for r in filtered], nbins=30,
+                               title="Sharpe Distribution", labels={"x": "Sharpe", "y": "Count"})
             fig.add_vline(x=0, line_dash="dash", line_color="red")
             fig.update_layout(height=280, margin=dict(t=40, b=20))
             st.plotly_chart(fig, use_container_width=True)
-        with col2:
-            pnls = [r.get("total_net_pnl", 0) / 1000 for r in filtered]
-            fig = px.histogram(x=pnls, nbins=30, title="P&L Distribution",
-                               labels={"x": "Net P&L (Rs '000)", "y": "Count"})
+        with c2:
+            fig = px.histogram(x=[r.get("total_net_pnl", 0) / 1000 for r in filtered], nbins=30,
+                               title="P&L Distribution", labels={"x": "P&L (Rs '000)", "y": "Count"})
             fig.add_vline(x=0, line_dash="dash", line_color="red")
             fig.update_layout(height=280, margin=dict(t=40, b=20))
             st.plotly_chart(fig, use_container_width=True)
 
-    with tab_params:
+    with tab3:
         st.subheader("Parameter Impact on Sharpe")
-        st.caption("How each parameter affects risk-adjusted returns across all combinations")
-
-        param_keys = ["p_short_delta", "p_wing_width", "p_profit_target_pct",
-                       "p_stop_loss_multiplier", "p_time_stop_dte"]
-        labels = {
-            "p_short_delta": "Short Delta",
-            "p_wing_width": "Wing Width (pts)",
-            "p_profit_target_pct": "Profit Target (%)",
-            "p_stop_loss_multiplier": "Stop Loss (x)",
-            "p_time_stop_dte": "Time Stop (DTE)",
+        param_map = {
+            "short_delta": "Short Delta", "wing_width": "Wing Width",
+            "profit_target_pct": "Profit Target", "stop_loss_multiplier": "Stop Loss (x)",
+            "time_stop_dte": "Time Stop (DTE)",
         }
+        param_data = []
+        for r in filtered:
+            p = r.get("params", {})
+            row = {"sharpe": r.get("sharpe_ratio", 0)}
+            for k in param_map:
+                row[k] = p.get(k, 0)
+            param_data.append(row)
 
-        df = get_results_df(ic_data)
-        df = df[df["slippage_model"] == slippage]
-
-        if not df.empty:
+        if param_data:
+            pdf = pd.DataFrame(param_data)
             cols = st.columns(2)
-            for i, param in enumerate(param_keys):
-                if param not in df.columns or df[param].nunique() <= 1:
+            for i, (k, label) in enumerate(param_map.items()):
+                if pdf[k].nunique() <= 1:
                     continue
                 with cols[i % 2]:
-                    fig = px.box(df, x=param, y="sharpe_ratio",
-                                 title=labels.get(param, param),
-                                 labels={"sharpe_ratio": "Sharpe", param: ""})
+                    fig = px.box(pdf, x=k, y="sharpe", title=label,
+                                 labels={"sharpe": "Sharpe", k: ""})
                     fig.update_layout(height=280, margin=dict(t=40, b=20))
                     st.plotly_chart(fig, use_container_width=True)
 
@@ -522,73 +522,41 @@ elif page == "Iron Condor":
 # ════════════════════════════════════════════════════════════════════════════
 
 elif page == "Calendar Spread":
-    st.header("Calendar Spread — Deep Dive")
+    st.header("Calendar Spread")
 
     if not cal_data:
-        st.error("No CAL data available.")
+        st.error("No CAL data.")
         st.stop()
 
     results = cal_data.get("results", [])
     filtered = [r for r in results if r.get("slippage_model") == slippage]
     filtered.sort(key=lambda r: r.get("sharpe_ratio", 0), reverse=True)
 
-    st.caption(f"{len(filtered)} configurations | {slippage} slippage")
+    st.caption(f"{len(filtered)} configs | {slippage} slippage")
 
     best = filtered[0] if filtered else None
     if not best:
         st.stop()
 
-    tab_best, tab_all, tab_params = st.tabs(["Best Configuration", "All Configurations", "Parameter Sensitivity"])
+    tab1, tab2, tab3 = st.tabs(["Best Config", "All Configs", "Parameters"])
 
-    with tab_best:
-        pnl = best.get("total_net_pnl", 0)
-        combined = pnl + PARKED_CAPITAL_ANNUAL_INCOME
-
+    with tab1:
         st.subheader(f"`{best.get('strategy_name', '')}`")
 
-        r1, r2, r3, r4, r5, r6 = st.columns(6)
-        r1.metric("Trading P&L", fmt_rs(pnl))
-        r2.metric("Combined Income", fmt_rs(combined), delta=f"+{fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME)} parked")
-        r3.metric("ROI (Total Capital)", fmt_pct(combined / CAPITAL * 100))
-        r4.metric("Annual Return", fmt_pct(best.get("annual_return_pct", 0)))
-        r5.metric("Gross P&L", fmt_rs(best.get("total_gross_pnl", 0)))
-        r6.metric("Total Costs", fmt_rs(best.get("total_costs", 0)))
-
-        st.markdown("")
-
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
-        k1.metric("Sharpe", f"{best.get('sharpe_ratio', 0):.3f}")
-        k2.metric("Sortino", f"{best.get('sortino_ratio', 0):.3f}")
-        k3.metric("Calmar", f"{best.get('calmar_ratio', 0):.3f}")
-        k4.metric("Max Drawdown", f"{best.get('max_drawdown_pct', 0):.2%}")
-        k5.metric("Win Rate", f"{best.get('win_rate', 0):.1%}")
-        k6.metric("Profit Factor", f"{best.get('profit_factor', 0):.2f}")
-
-        st.markdown("")
-        t1, t2, t3, t4, t5, t6 = st.columns(6)
-        t1.metric("Total Trades", best.get("total_trades", 0))
-        t2.metric("Winners", best.get("winning_trades", 0))
-        t3.metric("Losers", best.get("losing_trades", 0))
-        t4.metric("Avg Winner", fmt_rs(best.get("avg_winner", 0)))
-        t5.metric("Avg Loser", fmt_rs(best.get("avg_loser", 0)))
-        t6.metric("Avg Holding", f"{best.get('avg_holding_days', 0):.0f} days")
-
         params = best.get("params", {})
-        with st.expander("Strategy Parameters"):
-            p_cols = st.columns(6)
-            param_display = [
-                ("Adj Threshold", params.get("move_pct_to_adjust", 0), True),
-                ("Close Threshold", params.get("move_pct_to_close", 0), True),
-                ("Profit Target", params.get("profit_target_pct", 0), True),
-                ("Back Close DTE", f"{params.get('back_month_close_dte', 0)}", False),
-                ("Max VIX", params.get("max_vix", 0), False),
-                ("Front Roll DTE", params.get("front_roll_dte", 0), False),
-            ]
-            for i, (label, val, is_pct) in enumerate(param_display):
-                if is_pct and isinstance(val, float) and val < 1:
-                    p_cols[i].metric(label, f"{val:.1%}")
+        with st.expander("Configuration Parameters (from sweep)"):
+            pcols = st.columns(6)
+            display_keys = ["move_pct_to_adjust", "move_pct_to_close", "profit_target_pct",
+                            "back_month_close_dte", "max_vix", "front_roll_dte"]
+            for i, k in enumerate(display_keys):
+                v = params.get(k, 0)
+                label = k.replace("_", " ").title()
+                if isinstance(v, float) and v < 1:
+                    pcols[i].metric(label, f"{v:.1%}")
                 else:
-                    p_cols[i].metric(label, val)
+                    pcols[i].metric(label, v)
+
+        render_metrics_row(best)
 
         trades = best.get("trades", [])
         col1, col2 = st.columns(2)
@@ -600,115 +568,61 @@ elif page == "Calendar Spread":
             st.plotly_chart(make_drawdown_chart(trades), use_container_width=True)
 
         if trades:
-            trade_pnls = [t.get("net_pnl", 0) for t in trades]
-            colors = [pnl_color(p) for p in trade_pnls]
+            pnls = [t.get("net_pnl", 0) for t in trades]
             fig = go.Figure(go.Bar(
-                x=list(range(1, len(trades) + 1)), y=trade_pnls,
-                marker_color=colors,
-                hovertemplate="Trade %{x}<br>P&L: Rs %{y:,.0f}<extra></extra>",
+                x=list(range(1, len(trades) + 1)), y=pnls,
+                marker_color=[pnl_color(p) for p in pnls],
             ))
-            fig.update_layout(height=250, margin=dict(t=10, b=30, l=50, r=10),
-                              xaxis_title="Trade #", yaxis_title="Net P&L (Rs)", yaxis=dict(tickformat=","))
+            fig.update_layout(height=240, margin=dict(t=10, b=30, l=50, r=10),
+                              xaxis_title="Trade #", yaxis_title="P&L (Rs)", yaxis=dict(tickformat=","))
             st.markdown("**Trade-by-Trade P&L**")
             st.plotly_chart(fig, use_container_width=True)
 
-        # Adjustment analysis
-        adj_trades = [t for t in trades if t.get("adjustment_count", 0) > 0]
         st.markdown("---")
         st.subheader("Adjustment Analysis")
-        if adj_trades:
-            total_adj = sum(t.get("adjustment_count", 0) for t in trades)
-            total_adj_cost = sum(t.get("adjustment_costs", 0) for t in trades)
-            total_adj_pnl = sum(t.get("adjustment_pnl", 0) for t in trades)
+        render_adjustment_analysis(trades)
 
-            a1, a2, a3, a4 = st.columns(4)
-            a1.metric("Trades Adjusted", f"{len(adj_trades)} / {len(trades)}")
-            a2.metric("Total Adjustments", total_adj)
-            a3.metric("Adjustment Costs", fmt_rs(total_adj_cost))
-            a4.metric("Adjustment P&L", fmt_rs(total_adj_pnl))
-
-            adj_rows = []
-            for t in adj_trades:
-                meta = t.get("metadata", {})
-                adj_rows.append({
-                    "Trade": t.get("position_id", "")[-6:],
-                    "Entry": t.get("entry_date", "")[:10],
-                    "Exit": t.get("exit_date", "")[:10],
-                    "Days": t.get("holding_days", 0),
-                    "Exit Type": t.get("exit_type", ""),
-                    "Adj Count": t.get("adjustment_count", 0),
-                    "Adj Cost": fmt_rs(t.get("adjustment_costs", 0)),
-                    "Adj P&L": fmt_rs(t.get("adjustment_pnl", 0)),
-                    "Net P&L": fmt_rs(t.get("net_pnl", 0)),
-                    "VIX": f"{meta.get('vix_at_entry', 0):.1f}",
-                    "Strike": meta.get("strike", ""),
-                })
-            st.dataframe(pd.DataFrame(adj_rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("No adjustments triggered.")
-
-        # All trades
         st.markdown("---")
         st.subheader("All Trades")
-        if trades:
-            trade_rows = []
-            for i, t in enumerate(trades):
-                meta = t.get("metadata", {})
-                trade_rows.append({
-                    "#": i + 1,
-                    "Entry": t.get("entry_date", "")[:10],
-                    "Exit": t.get("exit_date", "")[:10],
-                    "Days": t.get("holding_days", 0),
-                    "Exit": t.get("exit_type", ""),
-                    "Net P&L": fmt_rs(t.get("net_pnl", 0)),
-                    "Adj": t.get("adjustment_count", 0),
-                    "Strike": meta.get("strike", ""),
-                    "F-DTE": meta.get("front_dte", ""),
-                    "B-DTE": meta.get("back_dte", ""),
-                    "VIX": f"{meta.get('vix_at_entry', 0):.1f}",
-                })
-            st.dataframe(pd.DataFrame(trade_rows), use_container_width=True, hide_index=True)
+        render_trades_table(trades, "CAL")
 
-    with tab_all:
-        st.subheader("All Configurations Ranked")
+    with tab2:
+        st.subheader("Top 50 Configurations")
         rows = []
         for i, r in enumerate(filtered[:50]):
             pnl = r.get("total_net_pnl", 0)
             rows.append({
-                "#": i + 1,
-                "Config": r.get("strategy_name", ""),
-                "Net P&L": fmt_rs(pnl),
-                "Sharpe": f"{r.get('sharpe_ratio', 0):.2f}",
-                "Win Rate": f"{r.get('win_rate', 0):.0%}",
-                "Max DD": f"{r.get('max_drawdown_pct', 0):.1%}",
-                "Trades": r.get("total_trades", 0),
-                "PF": f"{r.get('profit_factor', 0):.2f}",
+                "#": i + 1, "Config": r.get("strategy_name", ""),
+                "P&L": fmt_rs(pnl), "Sharpe": f"{r.get('sharpe_ratio', 0):.2f}",
+                "WR": f"{r.get('win_rate', 0):.0%}", "DD": f"{r.get('max_drawdown_pct', 0):.1%}",
+                "Trades": r.get("total_trades", 0), "PF": f"{r.get('profit_factor', 0):.2f}",
             })
-        if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=600)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=500)
 
-    with tab_params:
+    with tab3:
         st.subheader("Parameter Impact on Sharpe")
-        param_keys = ["p_move_pct_to_adjust", "p_move_pct_to_close",
-                       "p_profit_target_pct", "p_back_month_close_dte", "p_max_vix"]
-        labels = {
-            "p_move_pct_to_adjust": "Adj Threshold (%)",
-            "p_move_pct_to_close": "Close Threshold (%)",
-            "p_profit_target_pct": "Profit Target (%)",
-            "p_back_month_close_dte": "Back Month Close DTE",
-            "p_max_vix": "Max VIX",
+        param_map = {
+            "move_pct_to_adjust": "Adj Threshold", "move_pct_to_close": "Close Threshold",
+            "profit_target_pct": "Profit Target", "back_month_close_dte": "Back Close DTE",
+            "max_vix": "Max VIX",
         }
-        df = get_results_df(cal_data)
-        df = df[df["slippage_model"] == slippage]
-        if not df.empty:
+        param_data = []
+        for r in filtered:
+            p = r.get("params", {})
+            row = {"sharpe": r.get("sharpe_ratio", 0)}
+            for k in param_map:
+                row[k] = p.get(k, 0)
+            param_data.append(row)
+
+        if param_data:
+            pdf = pd.DataFrame(param_data)
             cols = st.columns(2)
-            for i, param in enumerate(param_keys):
-                if param not in df.columns or df[param].nunique() <= 1:
+            for i, (k, label) in enumerate(param_map.items()):
+                if pdf[k].nunique() <= 1:
                     continue
                 with cols[i % 2]:
-                    fig = px.box(df, x=param, y="sharpe_ratio",
-                                 title=labels.get(param, param),
-                                 labels={"sharpe_ratio": "Sharpe", param: ""})
+                    fig = px.box(pdf, x=k, y="sharpe", title=label,
+                                 labels={"sharpe": "Sharpe", k: ""})
                     fig.update_layout(height=280, margin=dict(t=40, b=20))
                     st.plotly_chart(fig, use_container_width=True)
 
@@ -718,43 +632,30 @@ elif page == "Calendar Spread":
 # ════════════════════════════════════════════════════════════════════════════
 
 elif page == "Combined IC+CAL":
-    st.header("Combined IC + CAL Strategy")
+    st.header("Combined IC + CAL")
 
     if not combined_data:
-        st.error("No combined data available.")
+        st.error("No combined data.")
         st.stop()
 
     results = combined_data.get("results", [])
     filtered = [r for r in results if r.get("slippage_model") == slippage]
     filtered.sort(key=lambda r: r.get("sharpe_ratio", 0), reverse=True)
-
     best = filtered[0] if filtered else None
     if not best:
         st.stop()
 
-    st.caption(f"{len(filtered)} allocation blends | {slippage} slippage")
-
-    pnl = best.get("total_net_pnl", 0)
-    combined = pnl + PARKED_CAPITAL_ANNUAL_INCOME
+    profitable = sum(1 for r in filtered if r.get("total_net_pnl", 0) > 0)
+    st.caption(f"{len(filtered)} blends | {profitable}/{len(filtered)} profitable | {slippage} slippage")
 
     st.subheader(f"Best: IC {best.get('ic_allocation_pct', 50)}% / CAL {best.get('cal_allocation_pct', 50)}%")
+    render_metrics_row(best)
 
-    r1, r2, r3, r4, r5, r6 = st.columns(6)
-    r1.metric("Combined Income", fmt_rs(combined))
-    r2.metric("Trading P&L", fmt_rs(pnl))
-    r3.metric("ROI", fmt_pct(combined / CAPITAL * 100))
-    r4.metric("Sharpe", f"{best.get('sharpe_ratio', 0):.2f}")
-    r5.metric("Max DD", f"{best.get('max_drawdown_pct', 0):.1%}")
-    r6.metric("Win Rate", f"{best.get('win_rate', 0):.0%}")
-
-    st.markdown("")
-    t1, t2, t3, t4, t5, t6 = st.columns(6)
-    t1.metric("IC Trades", best.get("ic_trades", 0))
-    t2.metric("CAL Trades", best.get("cal_trades", 0))
-    t3.metric("Profit Factor", f"{best.get('profit_factor', 0):.2f}")
-    t4.metric("Avg Winner", fmt_rs(best.get("avg_winner", 0)))
-    t5.metric("Avg Loser", fmt_rs(best.get("avg_loser", 0)))
-    t6.metric("Calmar", f"{best.get('calmar_ratio', 0):.2f}")
+    # Extra combined metrics
+    c1, c2, c3 = st.columns(3)
+    c1.metric("IC Trades", best.get("ic_trades", 0))
+    c2.metric("CAL Trades", best.get("cal_trades", 0))
+    c3.metric("Allocation", f"IC{best.get('ic_allocation_pct', 50)}/CAL{best.get('cal_allocation_pct', 50)}")
 
     trades = best.get("trades", [])
     col1, col2 = st.columns(2)
@@ -762,83 +663,76 @@ elif page == "Combined IC+CAL":
         st.markdown("**Equity Curve**")
         st.plotly_chart(make_equity_curve(trades), use_container_width=True)
     with col2:
-        st.markdown("**P&L by Strategy**")
+        st.markdown("**Income Sources**")
         if trades:
             ic_pnl = sum(t["net_pnl"] for t in trades if t.get("strategy") == "IC")
             cal_pnl = sum(t["net_pnl"] for t in trades if t.get("strategy") == "CAL")
             fig = go.Figure(go.Pie(
-                labels=["IC", "CAL", "Parked Income"],
+                labels=["IC Trading", "CAL Trading", "Parked Capital"],
                 values=[max(0, ic_pnl), max(0, cal_pnl), PARKED_CAPITAL_ANNUAL_INCOME],
                 hole=0.45, marker_colors=["#3b82f6", "#8b5cf6", "#22c55e"],
                 textinfo="label+value", texttemplate="%{label}<br>Rs %{value:,.0f}",
             ))
-            fig.update_layout(height=340, margin=dict(t=10, b=10))
+            fig.update_layout(height=320, margin=dict(t=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
 
     # Trade bars by strategy
     if trades:
-        trade_pnls = [t.get("net_pnl", 0) for t in trades]
-        bar_colors = ["#3b82f6" if t.get("strategy") == "IC" else "#8b5cf6" for t in trades]
+        pnls = [t.get("net_pnl", 0) for t in trades]
+        colors = ["#3b82f6" if t.get("strategy") == "IC" else "#8b5cf6" for t in trades]
         fig = go.Figure(go.Bar(
-            x=list(range(1, len(trades) + 1)), y=trade_pnls,
-            marker_color=bar_colors,
-            hovertemplate="Trade %{x}: Rs %{y:,.0f}<br>%{customdata}<extra></extra>",
+            x=list(range(1, len(trades) + 1)), y=pnls, marker_color=colors,
+            hovertemplate="Trade %{x}: Rs %{y:,.0f} (%{customdata})<extra></extra>",
             customdata=[t.get("strategy", "") for t in trades],
         ))
         fig.add_hline(y=0, line_dash="dash", line_color="gray")
-        fig.update_layout(height=250, margin=dict(t=10, b=30, l=50, r=10),
-                          xaxis_title="Trade #", yaxis_title="P&L (Rs)",
-                          yaxis=dict(tickformat=","))
+        fig.update_layout(height=240, margin=dict(t=10, b=30, l=50, r=10),
+                          xaxis_title="Trade #", yaxis_title="P&L", yaxis=dict(tickformat=","))
         st.markdown("**Trade P&L (blue=IC, purple=CAL)**")
         st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("---")
-
     # Allocation analysis
+    st.markdown("---")
     st.subheader("Allocation Impact")
-    alloc_data = []
-    for r in filtered:
-        alloc_data.append({
-            "split": f"IC{r.get('ic_allocation_pct', 50)}/CAL{r.get('cal_allocation_pct', 50)}",
-            "sharpe": r.get("sharpe_ratio", 0),
-            "annual_return": r.get("annual_return_pct", 0),
-            "max_dd": r.get("max_drawdown_pct", 0) * 100,
-            "net_pnl": r.get("total_net_pnl", 0),
-        })
-    if alloc_data:
-        adf = pd.DataFrame(alloc_data)
+    adf = pd.DataFrame([{
+        "split": f"IC{r.get('ic_allocation_pct', 50)}/CAL{r.get('cal_allocation_pct', 50)}",
+        "sharpe": r.get("sharpe_ratio", 0),
+        "max_dd": r.get("max_drawdown_pct", 0) * 100,
+        "net_pnl": r.get("total_net_pnl", 0),
+    } for r in filtered])
+
+    if not adf.empty:
         c1, c2 = st.columns(2)
         with c1:
-            fig = px.box(adf, x="split", y="sharpe", title="Sharpe by Split",
+            fig = px.box(adf, x="split", y="sharpe", title="Sharpe by Allocation",
                          labels={"sharpe": "Sharpe", "split": ""})
             fig.update_layout(height=300, margin=dict(t=40, b=20))
             st.plotly_chart(fig, use_container_width=True)
         with c2:
             fig = px.scatter(adf, x="max_dd", y="sharpe", color="split",
-                             title="Risk vs Reward",
-                             labels={"max_dd": "Max Drawdown (%)", "sharpe": "Sharpe"})
+                             title="Risk vs Return", labels={"max_dd": "Max DD (%)", "sharpe": "Sharpe"})
             fig.update_layout(height=300, margin=dict(t=40, b=20))
             st.plotly_chart(fig, use_container_width=True)
 
-    # Top 10 table
+    # Top 10
     st.markdown("---")
-    st.subheader("Top 10 Combinations")
+    st.subheader("Top 10")
     rows = []
     for i, r in enumerate(filtered[:10]):
         pnl = r.get("total_net_pnl", 0)
         rows.append({
             "#": i + 1,
-            "IC Config": r.get("ic_config", ""),
-            "CAL Config": r.get("cal_config", ""),
+            "IC": r.get("ic_config", ""), "CAL": r.get("cal_config", ""),
             "Split": f"IC{r.get('ic_allocation_pct', 50)}/CAL{r.get('cal_allocation_pct', 50)}",
-            "Net P&L": fmt_rs(pnl),
-            "Sharpe": f"{r.get('sharpe_ratio', 0):.2f}",
-            "Win Rate": f"{r.get('win_rate', 0):.0%}",
-            "Max DD": f"{r.get('max_drawdown_pct', 0):.1%}",
-            "Trades": r.get("total_trades", 0),
+            "P&L": fmt_rs(pnl), "Sharpe": f"{r.get('sharpe_ratio', 0):.2f}",
+            "WR": f"{r.get('win_rate', 0):.0%}", "DD": f"{r.get('max_drawdown_pct', 0):.1%}",
         })
-    if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # Adjustments
+    st.markdown("---")
+    st.subheader("Adjustment Analysis")
+    render_adjustment_analysis(trades)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -847,64 +741,14 @@ elif page == "Combined IC+CAL":
 
 elif page == "Risk & Statistics":
     st.header("Risk & Statistical Validation")
+    st.caption("Bootstrap CI, Monte Carlo simulation, walk-forward testing, regime analysis")
 
-    for strat_name, data in [("Iron Condor", ic_data), ("Calendar Spread", cal_data)]:
-        if not data:
-            continue
-
-        stats = data.get("top_stats", [])
-        if not stats:
-            st.info(f"No statistical analysis available for {strat_name}.")
-            continue
-
-        st.subheader(strat_name)
-
-        for stat in stats:
-            verdict = stat.get("verdict", "N/A")
-            color_map = {"STRONG": "green", "MARGINAL": "orange", "WEAK": "red", "INSUFFICIENT_DATA": "gray"}
-            color = color_map.get(verdict, "gray")
-
-            with st.expander(f"{stat.get('strategy_name', '')} — :{color}[{verdict}]"):
-                # Sharpe CI
-                sci = stat.get("sharpe_ci")
-                if sci:
-                    st.markdown(f"**Sharpe 95% CI:** [{sci['lower']:.2f}, {sci['upper']:.2f}] "
-                                f"(point estimate: {sci.get('point', 0):.2f})")
-
-                # Monte Carlo
-                mc = stat.get("monte_carlo")
-                if mc:
-                    st.markdown("**Monte Carlo Simulation (10,000 paths)**")
-                    m1, m2, m3, m4, m5 = st.columns(5)
-                    m1.metric("P(Profit)", f"{mc['prob_profit']:.0%}")
-                    m2.metric("P(Ruin)", f"{mc['prob_ruin']:.0%}")
-                    m3.metric("Median P&L", fmt_rs(mc['median_pnl']))
-                    m4.metric("5th Percentile", fmt_rs(mc.get('pct_5', 0)))
-                    m5.metric("95th Percentile", fmt_rs(mc.get('pct_95', 0)))
-
-                # Walk-forward
-                wf = stat.get("walk_forward")
-                if wf:
-                    consistent = "Yes" if wf["is_consistent"] else "No"
-                    st.markdown(f"**Walk-Forward:** Consistent = {consistent} | "
-                                f"OOS Sharpe: {wf['oos_sharpe_mean']:.2f} | "
-                                f"Degradation: {wf['degradation_pct']:.0f}%")
-
-                # Regime analysis
-                regimes = stat.get("regime_analysis", [])
-                if regimes:
-                    st.markdown("**Performance by Market Regime:**")
-                    regime_rows = []
-                    for rg in regimes:
-                        regime_rows.append({
-                            "Regime": rg.get("regime", "").upper(),
-                            "Trades": rg.get("n_trades", 0),
-                            "Win Rate": f"{rg.get('win_rate', 0):.0%}",
-                            "Avg P&L": fmt_rs(rg.get("avg_pnl", 0)),
-                        })
-                    st.dataframe(pd.DataFrame(regime_rows), use_container_width=True, hide_index=True)
-
-        st.markdown("---")
+    if ic_data:
+        st.subheader("Iron Condor")
+        render_stats_section(ic_data, "IC")
+    if cal_data:
+        st.subheader("Calendar Spread")
+        render_stats_section(cal_data, "CAL")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -913,21 +757,21 @@ elif page == "Risk & Statistics":
 
 elif page == "Trade Explorer":
     st.header("Trade Explorer")
-    st.caption("Inspect individual trades from any configuration")
+    st.caption("Drill into every trade from any configuration")
 
-    strategy = st.selectbox("Strategy", ["Iron Condor", "Calendar Spread", "Combined"])
-    data = {"Iron Condor": ic_data, "Calendar Spread": cal_data, "Combined": combined_data}[strategy]
+    strat = st.selectbox("Strategy", ["Iron Condor", "Calendar Spread", "Combined"])
+    data = {"Iron Condor": ic_data, "Calendar Spread": cal_data, "Combined": combined_data}[strat]
 
     if not data:
-        st.error("No data for this strategy.")
+        st.error("No data.")
         st.stop()
 
     results = data.get("results", [])
     filtered = [r for r in results if r.get("slippage_model") == slippage]
     filtered.sort(key=lambda r: r.get("sharpe_ratio", 0), reverse=True)
 
-    config_names = [r.get("strategy_name", "") for r in filtered[:30]]
-    selected_name = st.selectbox("Configuration", config_names)
+    names = [r.get("strategy_name", "") for r in filtered[:30]]
+    selected_name = st.selectbox("Configuration", names)
     selected = next((r for r in filtered if r.get("strategy_name") == selected_name), None)
 
     if not selected:
@@ -935,65 +779,56 @@ elif page == "Trade Explorer":
 
     trades = selected.get("trades", [])
     if not trades:
-        st.info("No trades in this configuration.")
+        st.info("No trades.")
         st.stop()
 
-    st.markdown(f"**{len(trades)} trades** | Net P&L: {fmt_rs(selected.get('total_net_pnl', 0))} | "
-                f"Sharpe: {selected.get('sharpe_ratio', 0):.2f}")
+    st.markdown(f"**{len(trades)} trades** | P&L: {fmt_rs(selected.get('total_net_pnl', 0))} | "
+                f"Sharpe: {selected.get('sharpe_ratio', 0):.2f} | WR: {selected.get('win_rate', 0):.0%}")
 
-    # Exit type breakdown
-    col1, col2 = st.columns(2)
-    with col1:
-        exit_types = [t.get("exit_type", "UNKNOWN") for t in trades]
-        exit_counts = pd.Series(exit_types).value_counts()
-        fig = px.pie(values=exit_counts.values, names=exit_counts.index,
-                     title="Exit Reasons", hole=0.4)
-        fig.update_layout(height=300, margin=dict(t=40, b=10))
+    c1, c2 = st.columns(2)
+    with c1:
+        exits = pd.Series([t.get("exit_type", "?") for t in trades]).value_counts()
+        fig = px.pie(values=exits.values, names=exits.index, title="Exit Reasons", hole=0.4)
+        fig.update_layout(height=280, margin=dict(t=40, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        fig = px.histogram(x=[t.get("holding_days", 0) for t in trades], nbins=15,
+                           title="Holding Period", labels={"x": "Days", "y": "Count"})
+        fig.update_layout(height=280, margin=dict(t=40, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
-        # Holding days distribution
-        hold_days = [t.get("holding_days", 0) for t in trades]
-        fig = px.histogram(x=hold_days, nbins=15, title="Holding Period",
-                           labels={"x": "Days", "y": "Count"})
-        fig.update_layout(height=300, margin=dict(t=40, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-
-    # Full trade detail with expansion
     st.markdown("---")
     for i, t in enumerate(trades):
         meta = t.get("metadata", {})
         pnl = t.get("net_pnl", 0)
-        adj_count = t.get("adjustment_count", 0)
+        adj = t.get("adjustment_count", 0)
         color = "green" if pnl > 0 else "red"
 
         label = (f"Trade {i+1}: :{color}[{fmt_rs(pnl)}] | "
-                 f"{t.get('entry_date', '')[:10]} → {t.get('exit_date', '')[:10]} | "
+                 f"{t.get('entry_date', '')[:10]} to {t.get('exit_date', '')[:10]} | "
                  f"{t.get('exit_type', '')} | {t.get('holding_days', 0)}d"
-                 + (f" | {adj_count} adj" if adj_count else ""))
+                 + (f" | {adj} adj" if adj else ""))
 
         with st.expander(label):
             c1, c2, c3, c4, c5, c6 = st.columns(6)
             c1.metric("Gross P&L", fmt_rs(t.get("gross_pnl", 0)))
             c2.metric("Costs", fmt_rs(t.get("total_costs", 0)))
             c3.metric("Net P&L", fmt_rs(pnl))
-            c4.metric("Entry Premium", fmt_rs(t.get("net_premium_per_unit", 0)))
-            c5.metric("Close Cost", fmt_rs(t.get("close_cost_per_unit", 0)))
-            c6.metric("Holding Days", t.get("holding_days", 0))
+            c4.metric("Entry Premium", f"{t.get('net_premium_per_unit', 0):.1f}")
+            c5.metric("Close Cost", f"{t.get('close_cost_per_unit', 0):.1f}")
+            c6.metric("Days", t.get("holding_days", 0))
 
-            if adj_count > 0:
-                st.markdown(f"**Adjustments:** {adj_count} | "
+            if adj > 0:
+                st.markdown(f"**Adjustments:** {adj} | "
                             f"Cost: {fmt_rs(t.get('adjustment_costs', 0))} | "
-                            f"P&L Impact: {fmt_rs(t.get('adjustment_pnl', 0))}")
+                            f"P&L: {fmt_rs(t.get('adjustment_pnl', 0))}")
 
             if meta:
                 st.markdown("**Entry Conditions:**")
-                meta_display = {k: v for k, v in meta.items()
-                                if k not in ("adjustment_count",)}
-                st.json(meta_display)
+                st.json({k: v for k, v in meta.items() if k != "adjustment_count"})
 
 
 # ── Footer ───────────────────────────────────────────────────────────────────
 st.markdown("---")
-st.caption(f"Quant Dashboard v2.0 | Rs {TOTAL_CAPITAL:,} capital | "
-           f"Parked income: Rs {PARKED_CAPITAL_ANNUAL_INCOME:,.0f}/yr | 242 tests passing")
+st.caption(f"Quant Dashboard v2.0 | Baseline sweep (synthetic, seed=42) | "
+           f"Capital: {fmt_rs(TOTAL_CAPITAL)} | Parked: {fmt_rs(PARKED_CAPITAL_ANNUAL_INCOME)}/yr")
