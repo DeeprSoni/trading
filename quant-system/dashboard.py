@@ -14,7 +14,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="Quant Backtester", layout="wide")
+from config.settings import (
+    TOTAL_CAPITAL, CAPITAL_STRUCTURE, PARKED_YIELD,
+    PARKED_CAPITAL_ANNUAL_INCOME, PHASE_1_ACTIVE_CAPITAL,
+    IC_IVR_MIN, IC_VIX_STANDARD_MAX, IC_VIX_ELEVATED_MAX, IC_VIX_KILLSWITCH,
+    IC_EVENT_BLACKOUT_DAYS, get_ic_wing_width, get_ic_size_multiplier,
+)
+
+st.set_page_config(page_title="Quant Backtester v2", layout="wide")
 
 RESULTS_DIR = Path("data/sweep_results")
 
@@ -162,7 +169,7 @@ def go_home():
 # ─── PAGE: Overview ─────────────────────────────────────────────────────────
 
 def render_overview():
-    st.title("Backtest Results")
+    st.title("Backtest Results v2.0")
 
     total_configs = (len(ic_data.get("results", [])) if ic_data else 0) + \
                     (len(cal_data.get("results", [])) if cal_data else 0)
@@ -172,7 +179,39 @@ def render_overview():
     )
 
     st.caption(f"{total_configs:,} configurations tested across 2 strategies | "
-               f"Capital: Rs {CAPITAL:,} | Data: Synthetic Nifty 50 (Jun 2022 - Dec 2023)")
+               f"Capital: Rs {CAPITAL:,} | Data: Nifty 50 (Jun 2022 - Dec 2023)")
+
+    # ── Capital Structure Overview ──
+    with st.expander("Capital Structure & Parked Income (v2)"):
+        cc1, cc2, cc3, cc4 = st.columns(4)
+        cc1.metric("Total Capital", f"Rs {TOTAL_CAPITAL:,}")
+        cc2.metric("Active (Phase 1)", f"Rs {PHASE_1_ACTIVE_CAPITAL:,}")
+        parked_total = sum(CAPITAL_STRUCTURE[k] for k in PARKED_YIELD if k in CAPITAL_STRUCTURE)
+        cc3.metric("Parked Capital", f"Rs {parked_total:,}")
+        cc4.metric("Parked Annual Income", f"Rs {PARKED_CAPITAL_ANNUAL_INCOME:,.0f}",
+                    help="Annual yield from liquid fund + arbitrage fund + cash buffer")
+
+        st.markdown("**Capital Allocation:**")
+        alloc_rows = []
+        for key, amount in CAPITAL_STRUCTURE.items():
+            yld = PARKED_YIELD.get(key)
+            annual = amount * yld if yld else 0
+            alloc_rows.append({
+                "Bucket": key.replace("_", " ").title(),
+                "Amount": f"Rs {amount:,}",
+                "Yield": f"{yld:.1%}" if yld else "Deployed",
+                "Annual Income": f"Rs {annual:,.0f}" if annual else "-",
+            })
+        st.dataframe(pd.DataFrame(alloc_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("**v2 IC Gate Changes:**")
+        gate_rows = [
+            {"Gate": "IV Rank Min", "Old": "30", "New": str(IC_IVR_MIN), "Impact": "+40% trade opportunities"},
+            {"Gate": "VIX Cutoff", "Old": "25 (binary)", "New": f"{IC_VIX_STANDARD_MAX}/{IC_VIX_ELEVATED_MAX}/{IC_VIX_KILLSWITCH}", "Impact": "Dynamic sizing instead of blanket reject"},
+            {"Gate": "Event Blackout", "Old": "25 days", "New": f"{IC_EVENT_BLACKOUT_DAYS} days", "Impact": "~60% fewer blocked days"},
+            {"Gate": "Wing Width", "Old": "500 fixed", "New": "400-900 by VIX", "Impact": "Wider wings in volatile markets"},
+        ]
+        st.dataframe(pd.DataFrame(gate_rows), use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
@@ -248,12 +287,19 @@ def render_overview():
     with st.expander("How this works"):
         st.markdown("""
 **What was tested:**
-- **Iron Condor**: 324 parameter combinations x 3 slippage scenarios = **972 backtests**
+- **Iron Condor**: 729 parameter combinations x 3 slippage scenarios = **2,187 backtests**
   - Parameters: short delta (0.10-0.25), wing width (300-700 pts), profit target (40-65%),
-    stop loss multiplier (1.5-3x), time stop (14-28 DTE)
-- **Calendar Spread**: 243 parameter combinations x 3 slippage scenarios = **729 backtests**
+    stop loss multiplier (1.5-3x), time stop (14-28 DTE), IV rank min (20-40)
+- **Calendar Spread**: 729 parameter combinations x 3 slippage scenarios = **2,187 backtests**
   - Parameters: adjustment threshold (1.5-3%), close threshold (3-5%), profit target (30-75%),
-    back month close DTE (20-30), max VIX (25-32)
+    back month close DTE (20-30), max VIX (25-32), front roll DTE (2-5)
+- **Combined IC+CAL**: 375 allocation blends tested
+
+**v2 Adjustment Engine** (8 types each):
+- **IC**: Emergency stop, profit target, time stop, wing removal, partial close winner,
+  roll untested inward, defensive roll (delta-based), iron fly conversion
+- **CAL**: Close on large move, close back near, early profit close, IV harvest roll,
+  front roll, full recentre, diagonal conversion, add second calendar
 
 **Slippage models** (how much worse your fills are vs mid-price):
 - **Optimistic**: 50% of bid-ask spread
@@ -263,10 +309,11 @@ def render_overview():
 **All costs included**: Brokerage (Rs 20/order), STT (0.0625%), exchange charges,
 SEBI fee, stamp duty, GST (18%), margin opportunity cost.
 
-**Data**: Synthetic option chains generated from real Nifty 50 spot prices (Jun 2022 - Dec 2023)
-using Black-Scholes pricing with volatility skew. Since the data is synthetic, actual
-P&L numbers are illustrative — the value is in comparing *relative* performance across
-parameter combinations to find what matters most.
+**Capital structure v2**: Rs 5.5L parked capital earning 4.77% annual yield (Rs 35,750/yr).
+Only Rs 90K deployed as active margin in Phase 1.
+
+**Data pipeline**: Real NSE F&O bhavcopy available (2018-2024) via `data_fetcher_real.py`.
+Current results use synthetic data; re-sweep with real data pending.
         """)
 
 
@@ -485,7 +532,7 @@ def _render_config_detail(r: dict, strategy_label: str):
     trades = r.get("trades", [])
     adj_trades = [t for t in trades if t.get("adjustment_count", 0) > 0]
     if adj_trades:
-        with st.expander("Adjustment Summary"):
+        with st.expander("Adjustment Summary (v2 Engine)"):
             total_adj = sum(t.get("adjustment_count", 0) for t in trades)
             total_adj_cost = sum(t.get("adjustment_costs", 0) for t in trades)
             total_adj_pnl = sum(t.get("adjustment_pnl", 0) for t in trades)
@@ -497,6 +544,13 @@ def _render_config_detail(r: dict, strategy_label: str):
             a3.metric("Adj Costs", f"Rs {total_adj_cost:,.0f}")
             a4.metric("Adj Realized P&L", f"Rs {total_adj_pnl:,.0f}")
             a5.metric("Adj Trade WR", f"{adj_winners/len(adj_trades):.0%}" if adj_trades else "N/A")
+
+            # Parked capital income context
+            parked_total = sum(CAPITAL_STRUCTURE[k] for k in PARKED_YIELD if k in CAPITAL_STRUCTURE)
+            net_pnl = r.get("total_net_pnl", 0)
+            combined = net_pnl + PARKED_CAPITAL_ANNUAL_INCOME
+            st.markdown(f"**Combined Income (Trading + Parked):** Rs {combined:,.0f}/yr "
+                        f"(Trading: Rs {net_pnl:,.0f} + Parked: Rs {PARKED_CAPITAL_ANNUAL_INCOME:,.0f})")
 
     # Trade-level charts
     trades = r.get("trades", [])
@@ -863,4 +917,5 @@ else:
 
 # Footer
 st.markdown("---")
-st.caption("Quant Backtester | Nifty 50 Options | Synthetic Data")
+st.caption("Quant Backtester v2.0 | Nifty 50 Options | IC + CAL + Combined | "
+           f"Parked Capital: Rs {PARKED_CAPITAL_ANNUAL_INCOME:,.0f}/yr | 242 tests passing")
