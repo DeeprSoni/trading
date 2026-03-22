@@ -387,3 +387,63 @@ class BacktestStatAnalyser:
             return "MARGINAL"
         else:
             return "WEAK"
+
+
+def select_robust_params(sweep_results: list[dict]) -> dict:
+    """
+    Walk-forward parameter selection: picks the most robust parameter set
+    from a list of sweep results.
+
+    Each entry in sweep_results must be a dict with at least:
+      - "params": dict of parameters
+      - "sharpe_ratio": float — overall Sharpe ratio
+      - "max_drawdown_pct": float — maximum drawdown percentage
+      - "walk_forward_folds": list[dict] with "is_sharpe" and "oos_sharpe" keys
+        (one dict per fold)
+
+    Selection criteria (in order):
+      1. Positive OOS Sharpe in >= 4 of 5 walk-forward folds
+      2. OOS Sharpe mean >= 70% of IS Sharpe mean
+      3. Among qualifying, pick the one with the lowest max_drawdown_pct
+
+    Falls back to the entry with the best overall Sharpe ratio if no
+    entries qualify.
+
+    Returns the "params" dict of the selected entry.
+    """
+    if not sweep_results:
+        return {}
+
+    qualifying = []
+
+    for entry in sweep_results:
+        folds = entry.get("walk_forward_folds", [])
+        if not folds:
+            continue
+
+        oos_sharpes = [f.get("oos_sharpe", 0) for f in folds]
+        is_sharpes = [f.get("is_sharpe", 0) for f in folds]
+
+        # Criterion 1: positive OOS Sharpe in >= 4 of 5 folds
+        positive_oos = sum(1 for s in oos_sharpes if s > 0)
+        n_folds = len(folds)
+        min_positive = max(1, int(n_folds * 0.8))  # 4 out of 5
+        if positive_oos < min_positive:
+            continue
+
+        # Criterion 2: OOS Sharpe mean >= 70% of IS Sharpe mean
+        is_mean = sum(is_sharpes) / len(is_sharpes) if is_sharpes else 0
+        oos_mean = sum(oos_sharpes) / len(oos_sharpes) if oos_sharpes else 0
+        if is_mean > 0 and oos_mean < 0.70 * is_mean:
+            continue
+
+        qualifying.append(entry)
+
+    if qualifying:
+        # Criterion 3: lowest max drawdown among qualifying
+        best = min(qualifying, key=lambda e: e.get("max_drawdown_pct", float("inf")))
+        return best.get("params", {})
+
+    # Fallback: best overall Sharpe
+    best_sharpe = max(sweep_results, key=lambda e: e.get("sharpe_ratio", float("-inf")))
+    return best_sharpe.get("params", {})

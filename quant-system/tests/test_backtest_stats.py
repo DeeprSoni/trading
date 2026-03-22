@@ -192,3 +192,102 @@ class TestFullReport:
         result = _make_result(pnls)
         report = analyser.full_report(result, mc_simulations=2000)
         assert report.verdict == "WEAK"
+
+
+# --- Walk-Forward Parameter Selection ---
+
+class TestSelectRobustParams:
+    def test_select_robust_params_qualifying(self):
+        from src.backtest_stats import select_robust_params
+
+        # Entry A: passes all criteria, low drawdown
+        entry_a = {
+            "params": {"delta": 0.16, "wing": 500},
+            "sharpe_ratio": 1.5,
+            "max_drawdown_pct": 3.0,
+            "walk_forward_folds": [
+                {"is_sharpe": 1.0, "oos_sharpe": 0.8},
+                {"is_sharpe": 1.2, "oos_sharpe": 0.9},
+                {"is_sharpe": 1.1, "oos_sharpe": 0.85},
+                {"is_sharpe": 1.3, "oos_sharpe": 0.95},
+                {"is_sharpe": 0.9, "oos_sharpe": 0.75},
+            ],
+        }
+
+        # Entry B: passes criteria but higher drawdown
+        entry_b = {
+            "params": {"delta": 0.20, "wing": 400},
+            "sharpe_ratio": 1.8,
+            "max_drawdown_pct": 5.0,
+            "walk_forward_folds": [
+                {"is_sharpe": 1.5, "oos_sharpe": 1.2},
+                {"is_sharpe": 1.4, "oos_sharpe": 1.1},
+                {"is_sharpe": 1.6, "oos_sharpe": 1.3},
+                {"is_sharpe": 1.3, "oos_sharpe": 1.0},
+                {"is_sharpe": 1.7, "oos_sharpe": 1.4},
+            ],
+        }
+
+        result = select_robust_params([entry_a, entry_b])
+        # Should pick entry_a: lower drawdown among qualifying
+        assert result["delta"] == 0.16
+        assert result["wing"] == 500
+
+    def test_select_robust_params_fallback_to_best_sharpe(self):
+        from src.backtest_stats import select_robust_params
+
+        # Neither qualifies (not enough positive OOS folds)
+        entry_a = {
+            "params": {"delta": 0.16},
+            "sharpe_ratio": 0.5,
+            "max_drawdown_pct": 3.0,
+            "walk_forward_folds": [
+                {"is_sharpe": 1.0, "oos_sharpe": -0.5},
+                {"is_sharpe": 1.0, "oos_sharpe": -0.3},
+                {"is_sharpe": 1.0, "oos_sharpe": 0.1},
+                {"is_sharpe": 1.0, "oos_sharpe": -0.2},
+                {"is_sharpe": 1.0, "oos_sharpe": -0.4},
+            ],
+        }
+        entry_b = {
+            "params": {"delta": 0.20},
+            "sharpe_ratio": 1.2,
+            "max_drawdown_pct": 8.0,
+            "walk_forward_folds": [
+                {"is_sharpe": 1.5, "oos_sharpe": -0.1},
+                {"is_sharpe": 1.5, "oos_sharpe": -0.2},
+                {"is_sharpe": 1.5, "oos_sharpe": 0.1},
+                {"is_sharpe": 1.5, "oos_sharpe": -0.3},
+                {"is_sharpe": 1.5, "oos_sharpe": -0.1},
+            ],
+        }
+
+        result = select_robust_params([entry_a, entry_b])
+        # Falls back to best Sharpe — entry_b
+        assert result["delta"] == 0.20
+
+    def test_select_robust_params_empty_list(self):
+        from src.backtest_stats import select_robust_params
+        result = select_robust_params([])
+        assert result == {}
+
+    def test_select_robust_params_oos_below_70_pct_of_is(self):
+        from src.backtest_stats import select_robust_params
+
+        # Entry has positive OOS in 4/5 folds but OOS mean < 70% of IS mean
+        entry = {
+            "params": {"delta": 0.16},
+            "sharpe_ratio": 1.0,
+            "max_drawdown_pct": 4.0,
+            "walk_forward_folds": [
+                {"is_sharpe": 2.0, "oos_sharpe": 0.1},
+                {"is_sharpe": 2.0, "oos_sharpe": 0.2},
+                {"is_sharpe": 2.0, "oos_sharpe": 0.1},
+                {"is_sharpe": 2.0, "oos_sharpe": 0.15},
+                {"is_sharpe": 2.0, "oos_sharpe": 0.1},
+            ],
+        }
+        # OOS mean = 0.13, IS mean = 2.0 => 0.13 < 0.7 * 2.0 = 1.4 => fails
+        # Falls back to best Sharpe
+        result = select_robust_params([entry])
+        assert result["delta"] == 0.16  # only entry, falls back
