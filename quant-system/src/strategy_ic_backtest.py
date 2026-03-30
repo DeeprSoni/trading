@@ -10,6 +10,8 @@ thousands of variations.
 import logging
 from datetime import datetime
 
+import pandas as pd
+
 from config import settings
 from src.iv_calculator import IVCalculator
 from src.models import (
@@ -18,6 +20,7 @@ from src.models import (
 from src.adjustments_ic import (
     evaluate_ic_adjustment, ICPosition, ICAdjustmentConfig, ICAdjustment,
 )
+from src.strategy_ic import detect_regime, get_skewed_deltas
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +50,11 @@ class ICBacktestAdapter:
             "max_pct_capital": p.get("max_pct_capital", settings.IC_MAX_PCT_CAPITAL_PER_TRADE),
             "lot_size": p.get("lot_size", settings.NIFTY_LOT_SIZE),  # 75 (updated from 25)
             "min_premium": p.get("min_premium", 50),  # Min viable: Rs 50/unit covers costs at 4 legs * ~Rs 350/leg
+            "regime_skew": p.get("regime_skew", False),
         }
         self._last_exit_date = None  # cooldown tracking
         self._last_exit_reason = None  # for variable cooldown
+        self._spot_history = []
 
     @property
     def name(self) -> str:
@@ -65,6 +70,7 @@ class ICBacktestAdapter:
 
     def should_enter(self, state: MarketState) -> bool:
         """Quick pre-check: IV rank, VIX, DTE window, and cooldown."""
+        self._spot_history.append(state.underlying_price)
         p = self._params
         if state.iv_rank < p["min_iv_rank"]:
             return False
@@ -99,14 +105,22 @@ class ICBacktestAdapter:
         # Find target expiry date
         expiry_date = self._find_expiry(state, dte)
 
+        # Determine deltas: regime-skewed or symmetric
+        call_delta = p["short_delta"]
+        put_delta = p["short_delta"]
+        regime = "NEUTRAL"
+        if p["regime_skew"] and len(self._spot_history) >= 50:
+            regime = detect_regime(pd.Series(self._spot_history))
+            call_delta, put_delta = get_skewed_deltas(regime, p["short_delta"])
+
         try:
             short_call_strike = self.iv_calc.find_strike_by_delta(
-                chain, p["short_delta"], "CE",
+                chain, call_delta, "CE",
                 underlying_price=state.underlying_price,
                 time_to_expiry_years=time_to_expiry,
             )
             short_put_strike = self.iv_calc.find_strike_by_delta(
-                chain, p["short_delta"], "PE",
+                chain, put_delta, "PE",
                 underlying_price=state.underlying_price,
                 time_to_expiry_years=time_to_expiry,
             )
@@ -159,6 +173,7 @@ class ICBacktestAdapter:
                 "iv_rank_at_entry": state.iv_rank,
                 "vix_at_entry": state.india_vix,
                 "max_loss_per_lot": max_loss_per_lot,
+                "regime": regime,
             },
         )
 

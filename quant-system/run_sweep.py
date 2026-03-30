@@ -33,8 +33,12 @@ from src.cost_engine import CostEngine, SlippageModel
 from src.iv_calculator import IVCalculator
 from src.models import BacktestResult, MarketState
 from src.param_sweep import ParamSweepEngine, SweepConfig
+from src.backtest_stats import select_robust_params
+from src.strategy_bwb import BrokenWingButterflyAdapter
 from src.strategy_cal_backtest import CalBacktestAdapter
 from src.strategy_ic_backtest import ICBacktestAdapter
+from src.strategy_strangle import StrangleToICAdapter
+from src.strategy_vix_cal import VIXSpikeCalendarAdapter
 
 import warnings
 with warnings.catch_warnings():
@@ -226,6 +230,7 @@ def run_ic_sweep(states, slippage_models):
         "stop_loss_multiplier": [1.5, 2.0, 2.5],
         "time_stop_dte": [18, 21, 25],
         "min_iv_rank": [20, 25, 30],                 # v2: lowered from fixed 30
+        "regime_skew": [True, False],
     }
     total = 1
     for v in grid.values():
@@ -285,6 +290,24 @@ def run_cal_sweep(states, slippage_models):
         param_grid=grid,
         slippage_models=slippage_models,
     )
+    sweep = ParamSweepEngine(max_workers=1)
+    return sweep.run_sequential(config, states, rank_by="sharpe_ratio", min_trades=2)
+
+
+def run_bwb_sweep(states, slippage_models):
+    """Run Broken Wing Butterfly parameter sweep."""
+    grid = {
+        "short_delta": [0.16, 0.20, 0.25],
+        "wing_width": [400, 500, 600],
+        "profit_target_pct": [0.40, 0.50],
+        "stop_loss_multiplier": [1.5, 2.0],
+        "time_stop_dte": [18, 21],
+    }
+    total = 1
+    for v in grid.values():
+        total *= len(v)
+    print(f"\nBWB Sweep: {total} combos x {len(slippage_models)} slippage = {total * len(slippage_models)} runs")
+    config = SweepConfig(strategy_class=BrokenWingButterflyAdapter, param_grid=grid, slippage_models=slippage_models)
     sweep = ParamSweepEngine(max_workers=1)
     return sweep.run_sequential(config, states, rank_by="sharpe_ratio", min_trades=2)
 
@@ -678,7 +701,7 @@ def main():
     if not run_ic:
         ic_sweep = None
     else:
-            ic_sweep = run_ic_sweep(states, slippage_models)
+        ic_sweep = run_ic_sweep(states, slippage_models)
         print(f"IC: {ic_sweep.completed} completed, {len(ic_sweep.results)} passed filter, {ic_sweep.elapsed_seconds:.1f}s")
 
         ic_data = {
@@ -696,6 +719,10 @@ def main():
                 print(f"  {i+1}. {r.strategy_name}: Sharpe={r.sharpe_ratio:.2f}, "
                       f"Net={r.total_net_pnl:,.0f}, WR={r.win_rate:.0%}, DD={r.max_drawdown_pct:.1%}, "
                       f"Trades={r.total_trades}")
+
+        if ic_data["results"]:
+            robust = select_robust_params(ic_data["results"])
+            print(f"\nRobust IC params (walk-forward validated): {robust}")
 
         ic_filename = f"ic_sweep{suffix}.json"
         with open(output_dir / ic_filename, "w") as f:
@@ -725,10 +752,40 @@ def main():
                       f"Net={r.total_net_pnl:,.0f}, WR={r.win_rate:.0%}, DD={r.max_drawdown_pct:.1%}, "
                       f"Trades={r.total_trades}")
 
+        if cal_data["results"]:
+            robust = select_robust_params(cal_data["results"])
+            print(f"\nRobust CAL params (walk-forward validated): {robust}")
+
         cal_filename = f"cal_sweep{suffix}.json"
         with open(output_dir / cal_filename, "w") as f:
             json.dump(cal_data, f, indent=2, default=str)
         print(f"Saved CAL results to {output_dir / cal_filename}")
+
+    # --- BWB Sweep ---
+    if args.strategy in ("ALL",):
+        bwb_sweep = run_bwb_sweep(states, slippage_models)
+        print(f"BWB: {bwb_sweep.completed} completed, {len(bwb_sweep.results)} passed filter, {bwb_sweep.elapsed_seconds:.1f}s")
+
+        bwb_data = {
+            "sweep_type": "BWB",
+            "total_combinations": bwb_sweep.total_combinations,
+            "completed": bwb_sweep.completed,
+            "elapsed_seconds": bwb_sweep.elapsed_seconds,
+            "results": [result_to_dict(r) for r in bwb_sweep.results],
+        }
+
+        if bwb_sweep.results:
+            bwb_data["top_stats"] = run_stats_on_top(bwb_sweep.results, 5)
+            print(f"\nTop 5 BWB results:")
+            for i, r in enumerate(bwb_sweep.results[:5]):
+                print(f"  {i+1}. {r.strategy_name}: Sharpe={r.sharpe_ratio:.2f}, "
+                      f"Net={r.total_net_pnl:,.0f}, WR={r.win_rate:.0%}, DD={r.max_drawdown_pct:.1%}, "
+                      f"Trades={r.total_trades}")
+
+        bwb_filename = f"bwb_sweep{suffix}.json"
+        with open(output_dir / bwb_filename, "w") as f:
+            json.dump(bwb_data, f, indent=2, default=str)
+        print(f"Saved BWB results to {output_dir / bwb_filename}")
 
     # --- Combined IC+CAL ---
     if run_combined and ic_sweep and cal_sweep:
