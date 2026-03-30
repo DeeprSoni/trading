@@ -55,11 +55,16 @@ def load_sweep(filename: str) -> dict | None:
         return json.load(f)
 
 
+# Load both synthetic (baseline) and real data results
 ic_data = load_sweep("ic_sweep.json")
 cal_data = load_sweep("cal_sweep.json")
 combined_data = load_sweep("combined_sweep.json")
 
-if not ic_data and not cal_data:
+# Real data results (2024 NSE)
+ic_real = load_sweep("ic_sweep_real.json")
+cal_real = load_sweep("cal_sweep_real.json")
+
+if not ic_data and not cal_data and not ic_real:
     st.error("No results found. Run `python run_sweep.py` first.")
     st.stop()
 
@@ -281,7 +286,17 @@ with st.sidebar:
     ], label_visibility="collapsed")
 
     st.markdown("---")
-    slippage = st.selectbox("Slippage Model", ["optimistic", "realistic", "conservative"])
+    data_sources = ["Synthetic (baseline)"]
+    if ic_real:
+        data_sources.append("Real NSE 2024")
+    data_source = st.radio("Data Source", data_sources, index=len(data_sources)-1)
+    use_real = data_source == "Real NSE 2024"
+
+    if use_real:
+        slippage = "realistic"
+        st.caption("Real data: realistic slippage only")
+    else:
+        slippage = st.selectbox("Slippage Model", ["optimistic", "realistic", "conservative"])
 
     st.markdown("---")
     st.caption("**Capital**")
@@ -427,7 +442,7 @@ if page == "Live Market":
     # ── Section 3: Strategy Summary ───────────────────────────────────────
     st.subheader("Strategy Summary (from sweep)")
 
-    ic_best_lm = best_config(ic_data, slippage) if ic_data else None
+    ic_best_lm = best_config(active_ic, slippage) if active_ic else None
     cal_best_lm = best_config(cal_data, slippage) if cal_data else None
     comb_best_lm = best_config(combined_data, slippage) if combined_data else None
 
@@ -514,6 +529,13 @@ if page == "Live Market":
         st.info(f"Paper trading not yet started. ({type(e).__name__}: {e})")
 
 
+# ── Active data source (switches based on sidebar toggle) ────────────────────
+active_ic = ic_real if use_real and ic_real else ic_data
+active_cal = cal_real if use_real and cal_real else cal_data
+active_combined = combined_data if not use_real else None  # no combined for real yet
+data_label = "Real NSE 2024" if use_real else "Synthetic (baseline)"
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # PAGE: Overview
 # ════════════════════════════════════════════════════════════════════════════
@@ -522,16 +544,15 @@ elif page == "Overview":
     st.header("Overview")
 
     # ── Status Banner ──
-    st.info(
-        "**Current data:** Baseline sweep (seed=42, 400 days, Jun 2022 — Dec 2023, synthetic chains). "
-        "v2 code (relaxed gates, 8-type adjustment engines, real data pipeline) is implemented — "
-        "re-sweep with new settings pending."
-    )
+    if use_real:
+        st.success(f"**Data: Real NSE 2024** — 245 trading days, actual option prices from bhavcopy.")
+    else:
+        st.info("**Data: Synthetic baseline** (seed=42, 400 days, Jun 2022 — Dec 2023).")
 
     # ── Strategy Comparison ──
-    ic_best = best_config(ic_data, slippage) if ic_data else None
-    cal_best = best_config(cal_data, slippage) if cal_data else None
-    comb_best = best_config(combined_data, slippage) if combined_data else None
+    ic_best = best_config(active_ic, slippage) if active_ic else None
+    cal_best = best_config(active_cal, slippage) if active_cal else None
+    comb_best = best_config(active_combined, slippage) if active_combined else None
 
     st.subheader("Best Configs Compared")
 
@@ -632,11 +653,11 @@ elif page == "Overview":
 elif page == "Iron Condor":
     st.header("Iron Condor")
 
-    if not ic_data:
+    if not active_ic:
         st.error("No IC data.")
         st.stop()
 
-    results = ic_data.get("results", [])
+    results = active_ic.get("results", [])
     filtered = [r for r in results if r.get("slippage_model") == slippage]
     filtered.sort(key=lambda r: r.get("sharpe_ratio", 0), reverse=True)
 
@@ -765,15 +786,15 @@ elif page == "Iron Condor":
 elif page == "Calendar Spread":
     st.header("Calendar Spread")
 
-    if not cal_data:
+    if not active_cal:
         st.error("No CAL data.")
         st.stop()
 
-    results = cal_data.get("results", [])
+    results = active_cal.get("results", [])
     filtered = [r for r in results if r.get("slippage_model") == slippage]
     filtered.sort(key=lambda r: r.get("sharpe_ratio", 0), reverse=True)
 
-    st.caption(f"{len(filtered)} configs | {slippage} slippage")
+    st.caption(f"{len(filtered)} configs | {slippage} slippage | {data_label}")
 
     best = filtered[0] if filtered else None
     if not best:
@@ -984,12 +1005,12 @@ elif page == "Risk & Statistics":
     st.header("Risk & Statistical Validation")
     st.caption("Bootstrap CI, Monte Carlo simulation, walk-forward testing, regime analysis")
 
-    if ic_data:
+    if active_ic:
         st.subheader("Iron Condor")
-        render_stats_section(ic_data, "IC")
-    if cal_data:
+        render_stats_section(active_ic, "IC")
+    if active_cal:
         st.subheader("Calendar Spread")
-        render_stats_section(cal_data, "CAL")
+        render_stats_section(active_cal, "CAL")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1001,7 +1022,7 @@ elif page == "Trade Explorer":
     st.caption("Drill into every trade from any configuration")
 
     strat = st.selectbox("Strategy", ["Iron Condor", "Calendar Spread", "Combined"])
-    data = {"Iron Condor": ic_data, "Calendar Spread": cal_data, "Combined": combined_data}[strat]
+    data = {"Iron Condor": active_ic, "Calendar Spread": active_cal, "Combined": active_combined}[strat]
 
     if not data:
         st.error("No data.")
