@@ -22,9 +22,10 @@ import yfinance as yf
 logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
-NSE_FO_BHAV_BASE = "https://archives.nseindia.com/archives/fo/bhav"
-NSE_VIX_URL      = "https://archives.nseindia.com/content/indices/hist_vix_data.csv"
-CACHE_DIR        = Path("data/real_data_cache")
+# UDiFF format (works as of 2025+). Old format discontinued by NSE.
+NSE_FO_UDIFF_BASE = "https://nsearchives.nseindia.com/content/fo"
+NSE_VIX_URL       = "https://nsearchives.nseindia.com/content/indices/hist_vix_data.csv"
+CACHE_DIR         = Path("data/real_data_cache")
 
 # NSE CDN requires browser-like headers — no login, just headers
 _HEADERS = {
@@ -62,48 +63,75 @@ def fetch_fo_bhavcopy(
     session: requests.Session | None = None,
 ) -> pd.DataFrame | None:
     """
-    Fetch F&O bhavcopy for one trading day.
+    Fetch F&O bhavcopy for one trading day using NSE UDiFF format.
 
-    URL format:
-      https://archives.nseindia.com/archives/fo/bhav/fo{DDMMMYYYY}bhav.csv.zip
-      e.g.  fo01JAN2024bhav.csv.zip
+    URL format (UDiFF, works 2024+):
+      https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{YYYYMMDD}_F_0000.csv.zip
 
-    Returns DataFrame with columns:
-      INSTRUMENT, SYMBOL, EXPIRY_DT, STRIKE_PR, OPTION_TYP,
-      OPEN, HIGH, LOW, CLOSE, SETTLE_PR,
-      CONTRACTS, VAL_INLAKH, OPEN_INT, CHG_IN_OI, TIMESTAMP
+    Normalizes UDiFF column names to legacy format for backward compatibility:
+      TckrSymb → SYMBOL, XpryDt → EXPIRY_DT, StrkPric → STRIKE_PR,
+      OptnTp → OPTION_TYP, ClsPric → CLOSE, SttlmPric → SETTLE_PR,
+      OpnIntrst → OPEN_INT, TtlTradgVol → CONTRACTS, TradDt → TIMESTAMP,
+      FinInstrmTp → INSTRUMENT
 
     Returns None on weekends, holidays, or future dates (404 from NSE).
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    date_str = date.strftime("%d%b%Y").upper()      # "01JAN2024"
+    date_str = date.strftime("%d%b%Y").upper()
     cache_path = CACHE_DIR / f"fo_{date_str}.parquet"
 
     if cache_path.exists():
         return pd.read_parquet(cache_path)
 
-    url = f"{NSE_FO_BHAV_BASE}/fo{date_str}bhav.csv.zip"
+    # UDiFF URL format
+    ymd = date.strftime("%Y%m%d")
+    url = f"{NSE_FO_UDIFF_BASE}/BhavCopy_NSE_FO_0_0_0_{ymd}_F_0000.csv.zip"
+
     if session is None:
         session = _get_nse_session()
 
     try:
         resp = session.get(url, timeout=30)
         if resp.status_code == 404:
-            return None   # Holiday / weekend — expected, not an error
+            return None
         resp.raise_for_status()
 
         with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
             df = pd.read_csv(zf.open(zf.namelist()[0]))
 
-        # ── Clean ──────────────────────────────────────────────────────────
-        df.columns = df.columns.str.strip()
-        df["EXPIRY_DT"]  = pd.to_datetime(df["EXPIRY_DT"],  format="%d-%b-%Y", errors="coerce")
-        df["TIMESTAMP"]  = pd.to_datetime(df["TIMESTAMP"],  format="%d-%b-%Y", errors="coerce")
-        df["STRIKE_PR"]  = pd.to_numeric(df["STRIKE_PR"],   errors="coerce")
-        df["CLOSE"]      = pd.to_numeric(df["CLOSE"],       errors="coerce")
-        df["SETTLE_PR"]  = pd.to_numeric(df["SETTLE_PR"],   errors="coerce")
-        df["OPEN_INT"]   = pd.to_numeric(df["OPEN_INT"],    errors="coerce")
-        df["CONTRACTS"]  = pd.to_numeric(df["CONTRACTS"],   errors="coerce")
+        # ── Normalize UDiFF columns to legacy names ────────────────────────
+        col_map = {
+            "TckrSymb":      "SYMBOL",
+            "FinInstrmTp":   "INSTRUMENT",
+            "XpryDt":        "EXPIRY_DT",
+            "StrkPric":      "STRIKE_PR",
+            "OptnTp":        "OPTION_TYP",
+            "OpnPric":       "OPEN",
+            "HghPric":       "HIGH",
+            "LwPric":        "LOW",
+            "ClsPric":       "CLOSE",
+            "SttlmPric":     "SETTLE_PR",
+            "OpnIntrst":     "OPEN_INT",
+            "ChngInOpnIntrst": "CHG_IN_OI",
+            "TtlTradgVol":   "CONTRACTS",
+            "TtlTrfVal":     "VAL_INLAKH",
+            "TradDt":        "TIMESTAMP",
+        }
+        df = df.rename(columns=col_map)
+
+        # Map UDiFF instrument types to legacy: IDO→OPTIDX, IDF→FUTIDX, STO→OPTSTK, STF→FUTSTK
+        instr_map = {"IDO": "OPTIDX", "IDF": "FUTIDX", "STO": "OPTSTK", "STF": "FUTSTK"}
+        if "INSTRUMENT" in df.columns:
+            df["INSTRUMENT"] = df["INSTRUMENT"].map(instr_map).fillna(df["INSTRUMENT"])
+
+        # Parse dates and numerics
+        df["EXPIRY_DT"]  = pd.to_datetime(df["EXPIRY_DT"], errors="coerce")
+        df["TIMESTAMP"]  = pd.to_datetime(df["TIMESTAMP"], errors="coerce")
+        df["STRIKE_PR"]  = pd.to_numeric(df["STRIKE_PR"],  errors="coerce")
+        df["CLOSE"]      = pd.to_numeric(df["CLOSE"],      errors="coerce")
+        df["SETTLE_PR"]  = pd.to_numeric(df["SETTLE_PR"],  errors="coerce")
+        df["OPEN_INT"]   = pd.to_numeric(df["OPEN_INT"],   errors="coerce")
+        df["CONTRACTS"]  = pd.to_numeric(df["CONTRACTS"],  errors="coerce")
 
         df.to_parquet(cache_path, index=False)
         logger.info(f"Cached {date_str}: {len(df):,} records")
